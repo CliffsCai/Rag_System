@@ -1,0 +1,163 @@
+1. 结构化输出，调用openAI的结构化方法
+2. 对话存储，涉及到记忆存储
+3. 知识图谱
+4. 用户反馈
+5. 文档标签
+6. oss存储文件
+7. 是否启用关键词匹配，正则或者llm来判断
+7. 三路找回，启用系数向量，涉及到新建collection添加该索引。
+excel存入
+pdf等文件可以用langchain的community中获取相应功能，而不用依赖于ADBpostgreSQL
+多个知识库召回，llm判断参与检索的collection。
+
+
+创建向量来存储历史记忆：
+from langchain.memory import VectorStoreRetrieverMemory
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.chains import ConversationalRetrievalChain
+from langchain.chat_models import ChatOpenAI
+
+# 创建向量存储来索引对话历史
+embeddings = OpenAIEmbeddings()
+vectorstore = FAISS.from_texts([""], embeddings)
+retriever = vectorstore.as_retriever(search_kwargs=dict(k=5))
+memory = VectorStoreRetrieverMemory(retriever=retriever)
+
+# 创建对话检索链
+chain = ConversationalRetrievalChain.from_llm(
+    llm=ChatOpenAI(),
+    retriever=retriever,
+    memory=memory,
+)
+
+# 使用链进行对话
+result = chain({"question": "What is the capital of France?"})
+print(result)
+
+# 更新记忆
+memory.save_context({"input": "What is the capital of France?"}, {"output": result['answer']})
+
+结构化输出示例：
+Q9: 解释 LangChain 中的 Structured Output Parser 的工作原理,并提供一个复杂的示例,展示如何处理嵌套的JSON结构和自定义验证逻辑。
+A9: Structured Output Parser 用于将 LLM 的文本输出解析为结构化数据。它的工作原理是:
+
+定义期望的输出结构
+创建一个提示,指导 LLM 生成符合该结构的输出
+使用解析器将 LLM 的输出转换为结构化数据
+处理嵌套 JSON 结构和自定义验证的示例:
+
+from langchain.output_parsers import PydanticOutputParser
+from langchain.prompts import PromptTemplate
+from langchain.llms import OpenAI
+from pydantic import BaseModel, Field, validator
+from typing import List, Optional
+
+class Author(BaseModel):
+    name: str = Field(description="Name of the author")
+    birth_year: int = Field(description="Year the author was born")
+    
+    @validator('birth_year')
+    def valid_year(cls, v):
+        if v < 0 or v > 2023:
+            raise ValueError("Birth year must be between 0 and 2023")
+        return v
+
+class Book(BaseModel):
+    title: str = Field(description="Title of the book")
+    author: Author = Field(description="Author of the book")
+    publication_year: int = Field(description="Year the book was published")
+    genres: List[str] = Field(description="List of genres the book belongs to")
+    
+    @validator('publication_year')
+    def valid_publication_year(cls, v, values, **kwargs):
+        if 'author' in values and v < values['author'].birth_year:
+            raise ValueError("Publication year cannot be before author's birth year")
+        return v
+
+class Library(BaseModel):
+    name: str = Field(description="Name of the library")
+    books: List[Book] = Field(description="List of books in the library")
+    founded_year: Optional[int] = Field(description="Year the library was founded")
+
+    @validator('founded_year')
+    def valid_founded_year(cls, v):
+        if v and (v < 1000 or v > 2023):
+            raise ValueError("Founded year must be between 1000 and 2023")
+        return v
+
+parser = PydanticOutputParser(pydantic_object=Library)
+
+prompt = PromptTemplate(
+    template="Provide information about a library and its books.\n{format_instructions}\n{query}",
+    input_variables=["query"],
+    partial_variables={"format_instructions": parser.get_format_instructions()}
+)
+
+llm = OpenAI(temperature=0.7)
+
+_input = prompt.format_prompt(query="Describe a fictional library with 2 science fiction books")
+output = llm(_input.to_string())
+
+try:
+    structured_output = parser.parse(output)
+    print(structured_output)
+except ValueError as e:
+    print(f"Validation error: {e}")
+这个示例创建了一个复杂的嵌套结构(Library -> Books -> Authors),包含自定义的验证逻辑,如检查年份的有效性和出版年不能早于作者出生年等。
+
+
+少样本示例
+Q11: 解释 LangChain 中的 Few-Shot Learning Chain 的实现原理,并提供一个示例,展示如何动态生成和选择最优的少样本示例。
+A11: Few-Shot Learning Chain 利用少量示例来提高模型的性能。其实现原理是:
+
+准备一组示例
+根据当前任务动态选择最相关的示例
+将选定的示例与当前输入结合,生成提示
+使用 LLM 处理增强后的提示
+动态生成和选择最优少样本示例的示例:
+
+from langchain import PromptTemplate, LLMChain, FewShotPromptTemplate
+from langchain.llms import OpenAI
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+
+# 创建示例库
+examples = [
+    {"input": "What is the capital of France?", "output": "The capital of France is Paris."},
+    {"input": "Who wrote Romeo and Juliet?", "output": "Romeo and Juliet was written by William Shakespeare."},
+    {"input": "What is the boiling point of water?", "output": "The boiling point of water is 100 degrees Celsius (212 degrees Fahrenheit)."}
+]
+
+# 创建嵌入模型和向量存储
+embeddings = OpenAIEmbeddings()
+vectorstore = FAISS.from_texts([ex["input"] for ex in examples], embeddings)
+
+# 创建示例选择器
+def select_examples(query, k=2):
+    relevant_examples = vectorstore.similarity_search(query, k=k)
+    return [examples[doc.metadata["index"]] for doc in relevant_examples]
+
+# 创建 Few-Shot 提示模板
+example_prompt = PromptTemplate(
+    input_variables=["input", "output"],
+    template="Human: {input}\nAI: {output}"
+)
+
+dynamic_prompt = FewShotPromptTemplate(
+    example_selector=select_examples,
+    example_prompt=example_prompt,
+    prefix="Answer the following question based on these examples:",
+    suffix="Human: {input}\nAI:",
+    input_variables=["input"]
+)
+
+# 创建 Few-Shot Learning Chain
+llm = OpenAI(temperature=0)
+few_shot_chain = LLMChain(llm=llm, prompt=dynamic_prompt)
+
+# 使用 Few-Shot Learning Chain
+question = "What is the largest planet in our solar system?"
+result = few_shot_chain.run(question)
+print(result)
+这个示例实现了一个动态的 Few-Shot Learning Chain,它根据输入查询选择最相关的示例,并使用这些示例来增强 LLM 的性能。
