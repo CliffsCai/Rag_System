@@ -410,3 +410,42 @@ body {
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
+
+/* ── Loading mask ── */
+.el-loading-mask {
+  background: rgba(13,17,23,0.75) !important;
+  backdrop-filter: blur(4px) !important;
+}
+.el-loading-spinner .path {
+  stroke: var(--blue) !important;
+}
+.el-loading-spinner .el-loading-text {
+  color: var(--text-secondary) !important;
+}
+.el-loading-spinner i {
+  color: var(--blue) !important;
+}
+
+/* ── Select dropdown (model selector / collection selector) ── */
+.el-select__wrapper {
+  background: rgba(255,255,255,0.04) !important;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.08) inset !important;
+  border-radius: 9px !important;
+  color: var(--text-primary) !important;
+}
+.el-select__wrapper:hover {
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.14) inset !important;
+}
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--blue) inset, 0 0 0 3px rgba(79,142,247,0.2) !important;
+}
+.el-select__selected-item,
+.el-select__placeholder {
+  color: var(--text-primary) !important;
+}
+.el-select__placeholder.is-transparent {
+  color: var(--text-muted) !important;
+}
+.el-select__caret {
+  color: var(--text-muted) !important;
+}
