@@ -23,8 +23,10 @@ async def upload_document(
     chunk_overlap: int = Form(100),
     zh_title_enhance: bool = Form(True),
     vl_enhance: bool = Form(False),
+    image_dpi: int = Form(150),
 ):
-    result = document_service.upload_document(
+    """单文件上传切分，自动判断图文/标准模式"""
+    result = await document_service.upload_document(
         file_name=file.filename,
         file_content=await file.read(),
         metadata_raw=metadata,
@@ -32,11 +34,12 @@ async def upload_document(
         chunk_overlap=chunk_overlap,
         zh_title_enhance=zh_title_enhance,
         vl_enhance=vl_enhance,
+        image_dpi=image_dpi,
     )
     return JSONResponse(content={
         "success": True,
         "message": "上传任务已提交，请在文件列表查看进度，完成后获取切片",
-        "data": {**result, "dry_run": True},
+        "data": result,
     })
 
 

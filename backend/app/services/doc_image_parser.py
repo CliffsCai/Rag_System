@@ -20,17 +20,21 @@ from app.services.oss_service import get_oss_service
 logger = logging.getLogger(__name__)
 
 
-def _upload_image(image_bytes: bytes, ext: str, job_id: str) -> str:
-    """上传图片到 OSS，返回 oss_key"""
+def _upload_image(image_bytes: bytes, ext: str, collection: str, file_name: str, chunk_id: str) -> str:
+    """上传图片到 OSS，返回 oss_key
+    路径格式：{collection}/{file_name}/{chunk_id}/{uuid}.{ext}
+    """
     oss_svc = get_oss_service()
     filename = f"{uuid.uuid4().hex[:12]}.{ext}"
-    oss_key = oss_svc.upload_file(f"rag_knowledge/images/{job_id}", filename, image_bytes)
+    oss_key = oss_svc.upload_file(f"rag_image/{collection}/{file_name}/{chunk_id}", filename, image_bytes)
     return oss_key
 
 
 def parse_pdf(
     file_content: bytes,
     job_id: str,
+    collection: str,
+    file_name: str,
     chunk_size: int = 500,
     chunk_overlap: int = 50,
     image_dpi: int = 150,
@@ -88,7 +92,7 @@ def parse_pdf(
                 if not img_rects:
                     continue
                 y_center = (img_rects[0].y0 + img_rects[0].y1) / 2
-                oss_key = _upload_image(img_bytes, ext, job_id)
+                oss_key = _upload_image(img_bytes, ext, collection, file_name, _chunk_id())
                 placeholder = f"<<IMAGE:{uuid.uuid4().hex[:8]}>>"
                 elements.append({
                     "type": "image",
@@ -206,6 +210,8 @@ def parse_pdf(
 def parse_word(
     file_content: bytes,
     job_id: str,
+    collection: str,
+    file_name: str,
     chunk_size: int = 500,
     chunk_overlap: int = 50,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -266,7 +272,7 @@ def parse_word(
                 return
             ct = img_part.content_type
             ext = ct.split("/")[-1].replace("jpeg", "jpg")
-            oss_key = _upload_image(img_bytes, ext, job_id)
+            oss_key = _upload_image(img_bytes, ext, collection, file_name, _chunk_id())
             placeholder = f"<<IMAGE:{uuid.uuid4().hex[:8]}>>"
 
             # 占位符直接插入 buffer，不计字符数

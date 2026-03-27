@@ -84,10 +84,12 @@ class OSSService:
             result = self.client.delete_multiple_objects(
                 oss.DeleteMultipleObjectsRequest(bucket=self.bucket, objects=objects)
             )
-            # OSS 默认静默模式：deleted_objects 只含失败项，成功项不返回
-            failed = len(result.deleted_objects) if result.deleted_objects else 0
-            logger.info(f"OSS 批量删除: 请求 {len(object_keys)} 个, 失败 {failed} 个")
-            return len(object_keys) - failed
+            # alibabacloud_oss_v2 默认非静默模式：deleted_objects 包含所有成功删除的对象
+            # 失败的对象不在此列表中（OSS 对不存在的对象也视为删除成功）
+            deleted_count = len(result.deleted_objects) if result.deleted_objects else 0
+            failed = len(object_keys) - deleted_count
+            logger.info(f"OSS 批量删除: 请求 {len(object_keys)} 个, 成功 {deleted_count} 个, 失败 {failed} 个")
+            return deleted_count
         except Exception as e:
             logger.error(f"OSS 批量删除失败: {e}")
             return 0

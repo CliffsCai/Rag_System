@@ -68,7 +68,7 @@ async def process_image_mode_files(
                 except Exception as e:
                     logger.warning(f"[图文切分] 清理旧 job 失败（继续）: {e}")
 
-            file_content = oss_service.get_object_bytes(f"{category_name}/{file_name}")
+            file_content = oss_service.get_object_bytes(f"category/{category_name}/{file_name}")
             job_id = str(uuid.uuid4())
 
             if ext == "pdf":
@@ -76,6 +76,8 @@ async def process_image_mode_files(
                     parse_pdf,
                     file_content=file_content,
                     job_id=job_id,
+                    collection=collection,
+                    file_name=file_name,
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
                     image_dpi=image_dpi,
@@ -85,6 +87,8 @@ async def process_image_mode_files(
                     parse_word,
                     file_content=file_content,
                     job_id=job_id,
+                    collection=collection,
+                    file_name=file_name,
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
                 )

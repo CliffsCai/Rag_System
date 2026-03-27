@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """知识库（Document Collection）管理：创建、查询列表、删除"""
 import logging
+import re
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 
 from app.services.adb_vector_service import get_adb_vector_service
@@ -13,6 +14,9 @@ from ._deps import manager_credentials, get_ns_password
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+_SAFE_COLLECTION_RE = re.compile(r'^[\w\u4e00-\u9fff\-]+$')
 
 
 class MetaFieldConfig(BaseModel):
@@ -36,6 +40,17 @@ class CreateCollectionRequest(BaseModel):
     pq_enable: Optional[int] = Field(0, description="是否开启PQ算法加速，0或1")
     external_storage: Optional[int] = Field(0, description="是否使用外部存储，0或1")
     image_mode: bool = Field(False, description="是否启用图文模式（自定义切分+图片关联）")
+
+    @field_validator("collection")
+    @classmethod
+    def validate_collection_name(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("知识库名称不能为空")
+        if not _SAFE_COLLECTION_RE.match(v):
+            raise ValueError(
+                f"知识库名称「{v}」含有非法字符，只允许字母、数字、下划线、连字符（不允许中文、空格或特殊符号）"
+            )
+        return v
 
 
 class DeleteCollectionRequest(BaseModel):

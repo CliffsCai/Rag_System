@@ -232,16 +232,20 @@ def add_chunk_image(
         raise NotFoundError(f"切片不存在: job_id={job_id}, chunk_index={chunk_index}")
 
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
+    job_meta = get_job_repository().get_job(job_id)
+    if not job_meta:
+        raise NotFoundError("任务不存在，无法确定图片存储路径")
+    img_collection = job_meta.get("collection", "unknown")
+    img_file_name = job_meta.get("file_name", "unknown")
+    chunk_id = f"{job_id}_{chunk_index}"
     try:
         oss_key = get_oss_service().upload_file(
-            f"rag_knowledge/images/{job_id}",
+            f"rag_image/{img_collection}/{img_file_name}/{chunk_id}",
             f"{uuid.uuid4().hex[:12]}.{ext}",
             file_content,
         )
     except Exception as e:
         raise ExternalServiceError(f"OSS 上传失败: {e}") from e
-
-    chunk_id = f"{job_id}_{chunk_index}"
     img_repo = get_chunk_image_repository()
     sort_order = len(img_repo.get_by_chunk(chunk_id))
     placeholder = f"<<IMAGE:{uuid.uuid4().hex[:8]}>>"

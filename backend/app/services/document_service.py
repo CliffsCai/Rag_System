@@ -5,6 +5,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import Optional
 
 from app.core.exceptions import NotFoundError, ValidationError, ExternalServiceError
@@ -22,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_EXT = {".pdf", ".doc", ".docx", ".txt", ".md", ".ppt", ".pptx"}
 
+# 文件名安全字符：字母、数字、中文、下划线、连字符、点（含扩展名整体校验）
+# 禁止空格及 OSS 路径敏感字符：/ \ ? # * < > | : " % & + = @ ! ( ) [ ] { } , ; ^ ~ ` '
+_SAFE_FILENAME_RE = re.compile(r'^[\w\u4e00-\u9fff\-\. ]+$')
+
 
 # ─── 工具函数 ─────────────────────────────────────────────────────────────────
 
@@ -31,6 +36,11 @@ def validate_file(filename: str, size: int) -> None:
         raise ValidationError(f"不支持的文件格式: {ext}")
     if size > 200 * 1024 * 1024:
         raise ValidationError("文件超过 200MB 限制")
+    if not _SAFE_FILENAME_RE.match(filename):
+        raise ValidationError(
+            f"文件名「{filename}」含有非法字符（不允许 / \\ ? # * 等特殊符号），请重命名后上传"
+        )
+
 
 
 def resolve_metadata(collection: str, file_name: str, base_meta: dict) -> dict:
@@ -49,7 +59,7 @@ def resolve_metadata(collection: str, file_name: str, base_meta: dict) -> dict:
 
 # ─── 单文件上传切分 ───────────────────────────────────────────────────────────
 
-def upload_document(
+async def upload_document(
     file_name: str,
     file_content: bytes,
     metadata_raw: Optional[str],
@@ -57,9 +67,29 @@ def upload_document(
     chunk_overlap: int = 100,
     zh_title_enhance: bool = True,
     vl_enhance: bool = False,
+    image_dpi: int = 150,
 ) -> dict:
+    """单文件上传切分入口：自动判断图文/标准模式"""
     validate_file(file_name, len(file_content))
 
+    collection = settings.adb_collection
+    col_config = get_collection_config_repository().get_by_collection(settings.adb_namespace, collection)
+    is_image_mode = bool(col_config and col_config.get("image_mode"))
+    ext = file_name.lower().rsplit(".", 1)[-1]
+
+    if is_image_mode:
+        if ext not in ("pdf", "docx"):
+            raise ValidationError("图文模式知识库仅支持 PDF / DOCX 格式")
+        return await start_chunking_single(
+            file_name=file_name,
+            file_content=file_content,
+            collection=collection,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            image_dpi=image_dpi,
+        )
+
+    # 标准模式
     metadata_dict: dict = {}
     if metadata_raw and metadata_raw.strip() and metadata_raw.strip().lower() not in ("undefined", "null", "none"):
         try:
@@ -67,23 +97,17 @@ def upload_document(
         except json.JSONDecodeError as e:
             raise ValidationError(f"元数据格式错误: {e}")
     metadata_dict["filename"] = file_name
-
-    collection = settings.adb_collection
     metadata_dict = resolve_metadata(collection, file_name, metadata_dict)
 
     try:
         doc_service = ADBDocumentService(namespace=settings.adb_namespace, collection=collection)
-        job_id = doc_service.upload_document_async(
-            file_name=file_name,
-            file_content=file_content,
-            metadata=metadata_dict,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            zh_title_enhance=zh_title_enhance,
-            vl_enhance=vl_enhance,
-            dry_run=True,
-            document_loader_name=settings.adb_document_loader_pdf if file_name.lower().endswith(".pdf") else None,
-            text_splitter_name=settings.adb_text_splitter,
+        job_id = await asyncio.to_thread(
+            doc_service.upload_document_async,
+            file_name, file_content, metadata_dict,
+            chunk_size, chunk_overlap,
+            zh_title_enhance, vl_enhance, True,
+            settings.adb_document_loader_pdf if file_name.lower().endswith(".pdf") else None,
+            settings.adb_text_splitter,
         )
     except Exception as e:
         raise ExternalServiceError(f"ADB 上传失败: {e}") from e
@@ -91,6 +115,82 @@ def upload_document(
     get_document_job_repository().upsert(
         file_name=file_name, job_id=job_id, category_id=None, collection=collection
     )
+    return {"job_id": job_id, "file_name": file_name}
+
+
+
+async def start_chunking_single(
+    file_name: str,
+    file_content: bytes,
+    collection: str,
+    chunk_size: int = 500,
+    chunk_overlap: int = 50,
+    image_dpi: int = 150,
+) -> dict:
+    """
+    图文模式单文件切分：本地 parse_pdf/parse_word → 写库。
+    仅支持图文模式 collection，仅支持 PDF / DOCX。
+    """
+    validate_file(file_name, len(file_content))
+
+    ext = file_name.lower().rsplit(".", 1)[-1]
+    if ext not in ("pdf", "docx"):
+        raise ValidationError("图文模式仅支持 PDF / DOCX 格式")
+
+    col_config = get_collection_config_repository().get_by_collection(settings.adb_namespace, collection)
+    if not col_config or not col_config.get("image_mode"):
+        raise ValidationError(f"知识库「{collection}」不是图文模式，请使用标准上传接口")
+
+    from app.services.doc_image_parser import parse_pdf, parse_word
+    from app.db import get_chunk_image_repository, get_job_repository
+    import uuid as _uuid
+
+    job_id = str(_uuid.uuid4())
+
+    if ext == "pdf":
+        chunks, image_records = await asyncio.to_thread(
+            parse_pdf,
+            file_content=file_content,
+            job_id=job_id,
+            collection=collection,
+            file_name=file_name,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            image_dpi=image_dpi,
+        )
+    else:
+        chunks, image_records = await asyncio.to_thread(
+            parse_word,
+            file_content=file_content,
+            job_id=job_id,
+            collection=collection,
+            file_name=file_name,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+
+    await asyncio.to_thread(
+        get_chunk_repository().bulk_insert,
+        job_id, file_name,
+        [{"page_content": c["content"], "metadata": c["metadata"]} for c in chunks],
+    )
+    if image_records:
+        await asyncio.to_thread(get_chunk_image_repository().bulk_insert, image_records)
+
+    get_document_job_repository().upsert(
+        file_name=file_name, job_id=job_id, category_id=None, collection=collection
+    )
+    get_job_repository().upsert_job(
+        job_id=job_id,
+        file_name=file_name,
+        namespace=settings.adb_namespace,
+        collection=collection,
+        splitting_method="image_mode",
+        dry_run=False,
+        status="Success",
+        message="图文模式本地切分完成",
+    )
+    logger.info(f"[图文切分-单文件] {file_name} 完成: {len(chunks)} 切片, {len(image_records)} 图片")
     return {"job_id": job_id, "file_name": file_name}
 
 
@@ -104,7 +204,7 @@ def upload_to_category(file_name: str, file_content: bytes, category_id: str) ->
         raise NotFoundError("类目不存在")
 
     try:
-        oss_key = get_oss_service().upload_file(category["name"], file_name, file_content)
+        oss_key = get_oss_service().upload_file(f"category/{category['name']}", file_name, file_content)
     except Exception as e:
         raise ExternalServiceError(f"OSS 上传失败: {e}") from e
 
@@ -141,7 +241,7 @@ async def batch_upload_to_category(
 
         try:
             oss_key = await asyncio.to_thread(
-                get_oss_service().upload_file, category["name"], file_name, file_content
+                get_oss_service().upload_file, f"category/{category['name']}", file_name, file_content
             )
         except Exception as e:
             return {"file_name": file_name, "success": False, "error": f"OSS 上传失败: {e}"}
@@ -181,6 +281,7 @@ async def start_chunking(
     oss_service = get_oss_service()
 
     all_files = cat_file_repo.list_by_category(category_id)
+    logger.info(f"[start_chunking] category_id={category_id} collection={collection} 查到 {len(all_files)} 个文件")
     if not all_files:
         return {"submitted": 0, "skipped": [], "files": [], "errors": []}
 
@@ -214,7 +315,7 @@ async def start_chunking(
                     pass
 
             try:
-                url = await asyncio.to_thread(oss_service.get_presigned_url_by_category, category_name, file_name)
+                url = await asyncio.to_thread(oss_service.get_presigned_url_by_category, f"category/{category_name}", file_name)
                 metadata = resolve_metadata(
                     collection, file_name,
                     {"filename": file_name, "category": category_name},
@@ -283,7 +384,7 @@ async def start_chunking_direct(
                 pass
 
         try:
-            url = await asyncio.to_thread(oss_service.get_presigned_url_by_category, category_name, file_name)
+            url = await asyncio.to_thread(oss_service.get_presigned_url_by_category, f"category/{category_name}", file_name)
             metadata = resolve_metadata(
                 collection, file_name,
                 {"filename": file_name, "category": category_name},
