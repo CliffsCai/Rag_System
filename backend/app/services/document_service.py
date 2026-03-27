@@ -170,9 +170,8 @@ async def start_chunking_single(
         )
 
     await asyncio.to_thread(
-        get_chunk_repository().bulk_insert,
-        job_id, file_name,
-        [{"page_content": c["content"], "metadata": c["metadata"]} for c in chunks],
+        get_chunk_repository().bulk_insert_with_ids,
+        job_id, file_name, chunks,
     )
     if image_records:
         await asyncio.to_thread(get_chunk_image_repository().bulk_insert, image_records)

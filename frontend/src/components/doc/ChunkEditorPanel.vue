@@ -195,8 +195,8 @@ const loadAllImageUrls = async () => {
       const images = res.data.data?.images || []
       const map = {}
       for (const img of images) {
-        if (img.placeholder && img.oss_key) {
-          map[img.placeholder] = `/api/v1/documents/image-proxy?oss_key=${encodeURIComponent(img.oss_key)}`
+        if (img.placeholder && img.oss_url) {
+          map[img.placeholder] = img.oss_url
         }
       }
       row._imageUrlMap = map
@@ -238,15 +238,15 @@ const confirmAddImage = async () => {
     const res = await docApi.addChunkImage(
       props.jobId, row.chunk_index, addImageFile.value, null, insertPos
     )
-    const { placeholder, oss_key } = res.data.data
+    const { placeholder, oss_url } = res.data.data
     // 前端同步插入占位符到 content
     row.content = row.content.slice(0, insertPos) + placeholder + row.content.slice(insertPos)
     row._cursorPos = null
     // 更新 imageUrlMap
-    if (oss_key) {
+    if (oss_url) {
       row._imageUrlMap = {
         ...row._imageUrlMap,
-        [placeholder]: `/api/v1/documents/image-proxy?oss_key=${encodeURIComponent(oss_key)}`
+        [placeholder]: oss_url
       }
     }
     addImageDialogVisible.value = false

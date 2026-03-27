@@ -43,6 +43,52 @@ class ChunkRepository(BaseRepository):
         """
         self._execute_sql(sql)
 
+    def bulk_insert_with_ids(self, job_id: str, file_name: str, chunks: List[Dict[str, Any]]):
+        """
+        图文模式专用：直接使用 parse_pdf/parse_word 返回的 chunk_id，
+        chunk_index 也用 chunk_id 末尾的序号，保证与 image_records 一致。
+        chunks 格式：[{"chunk_id": str, "content": str, "metadata": dict}, ...]
+        """
+        if not chunks:
+            return
+        ref = self._table_ref(self.table)
+        self._execute_sql(
+            f"DELETE FROM {ref} WHERE job_id = '{self._sql_escape(job_id)}';"
+        )
+        for enumerate_idx, chunk in enumerate(chunks):
+            chunk_id = chunk.get("chunk_id") or f"{job_id}_{enumerate_idx}"
+            # chunk_index 从 chunk_id 末尾取，保证和 image_records 里的 chunk_id 对应
+            try:
+                chunk_index = int(chunk_id.rsplit("_", 1)[-1])
+            except (ValueError, IndexError):
+                chunk_index = enumerate_idx
+            content = chunk.get("content") or ""
+            metadata = chunk.get("metadata") or {}
+            meta_json = json.dumps(metadata, ensure_ascii=False)
+            sql = f"""
+            INSERT INTO {ref}(
+                chunk_id, job_id, file_name, chunk_index,
+                original_content, current_content, metadata, status, created_at, updated_at
+            ) VALUES (
+                '{self._sql_escape(chunk_id)}',
+                '{self._sql_escape(job_id)}',
+                '{self._sql_escape(file_name)}',
+                {chunk_index},
+                '{self._sql_escape(content)}',
+                '{self._sql_escape(content)}',
+                '{self._sql_escape(meta_json)}'::jsonb,
+                'original',
+                NOW(), NOW()
+            )
+            ON CONFLICT (chunk_id) DO UPDATE SET
+                original_content = EXCLUDED.original_content,
+                current_content = EXCLUDED.current_content,
+                metadata = EXCLUDED.metadata,
+                status = 'original',
+                updated_at = NOW();
+            """
+            self._execute_sql(sql)
+
     def bulk_insert(self, job_id: str, file_name: str, chunks: List[Dict[str, Any]]):
         """从 JSONL 解析后批量写入，original_content 和 current_content 初始相同"""
         if not chunks:

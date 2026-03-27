@@ -176,7 +176,7 @@ def upsert_job_chunks(job_id: str) -> dict:
         {
             "id": c["chunk_id"],
             "content": c["current_content"],
-            "metadata": chunk_metadata,
+            "metadata": {**chunk_metadata, "chunk_id": c["chunk_id"]},
         }
         for c in chunks if c.get("current_content")
     ]
@@ -214,7 +214,12 @@ def batch_upsert_jobs(job_ids: list[str]) -> dict:
 # ─── 图片管理 ─────────────────────────────────────────────────────────────────
 
 def get_chunk_images(job_id: str, chunk_index: int) -> list:
-    return get_chunk_image_repository().get_by_chunk(f"{job_id}_{chunk_index}")
+    # chunk_index 是前端展示顺序（0,1,2...），需要先查 chunk_store 拿真实 chunk_id
+    # 因为 should_merge 后序号可能有空洞，不能直接拼 {job_id}_{chunk_index}
+    chunk = get_chunk_repository().get_by_job_and_index(job_id, chunk_index)
+    if not chunk:
+        return []
+    return get_chunk_image_repository().get_by_chunk(chunk["chunk_id"])
 
 
 def add_chunk_image(
@@ -237,7 +242,8 @@ def add_chunk_image(
         raise NotFoundError("任务不存在，无法确定图片存储路径")
     img_collection = job_meta.get("collection", "unknown")
     img_file_name = job_meta.get("file_name", "unknown")
-    chunk_id = f"{job_id}_{chunk_index}"
+    # 用 chunk_store 里的真实 chunk_id，不直接拼（should_merge 后序号可能有空洞）
+    chunk_id = chunk["chunk_id"]
     try:
         oss_key = get_oss_service().upload_file(
             f"rag_image/{img_collection}/{img_file_name}/{chunk_id}",

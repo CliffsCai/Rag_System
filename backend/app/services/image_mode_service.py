@@ -93,10 +93,12 @@ async def process_image_mode_files(
                     chunk_overlap=chunk_overlap,
                 )
 
-            chunk_repo.bulk_insert(
+            # 直接用 parse_pdf/parse_word 返回的 chunk_id，不让 bulk_insert 重新编号
+            # 否则 should_merge 合并后序号偏移，image_records 里的 chunk_id 会对不上
+            chunk_repo.bulk_insert_with_ids(
                 job_id=job_id,
                 file_name=file_name,
-                chunks=[{"page_content": c["content"], "metadata": c["metadata"]} for c in chunks],
+                chunks=chunks,
             )
             if image_records:
                 img_repo.bulk_insert(image_records)

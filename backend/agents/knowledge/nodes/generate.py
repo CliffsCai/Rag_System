@@ -90,35 +90,66 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
                 from app.db import get_chunk_image_repository
                 chunk_ids = []
                 for chunk in reranked_chunks:
-                    cid = (chunk.get("id") if isinstance(chunk, dict) else getattr(chunk, "chunk_id", None))
+                    if isinstance(chunk, dict):
+                        meta = chunk.get("metadata") or {}
+                        cid = meta.get("chunk_id") or chunk.get("id")
+                    else:
+                        meta = getattr(chunk, "metadata", {}) or {}
+                        cid = meta.get("chunk_id") or getattr(chunk, "chunk_id", None)
                     if cid:
                         chunk_ids.append(cid)
                 if chunk_ids:
+                    print(f"[Generate] 查询图片 chunk_ids: {chunk_ids}")
                     img_records = get_chunk_image_repository().get_by_chunk_ids(chunk_ids)
                     for r in img_records:
                         ph = r.get("placeholder", "")
                         ok = r.get("oss_key", "")
                         chunk_image_map.setdefault(r["chunk_id"], []).append(r)
                         if ok:
-                            image_map[ph] = f"/api/v1/documents/image-proxy?oss_key={ok}"
+                            from urllib.parse import quote
+                            image_map[ph] = f"/api/v1/documents/image-proxy?oss_key={quote(ok, safe='/')}"
                     print(f"[Generate] 图文模式: {len(img_records)} 条图片记录, image_map {len(image_map)} 条")
             except Exception as e:
                 import traceback
                 print(f"[Generate] 查询图片记录失败: {e}\n{traceback.format_exc()}")
 
+        context_parts.append("<knowledge_base>")
         for i, chunk in enumerate(reranked_chunks, 1):
             if isinstance(chunk, dict):
-                title = chunk.get("title") or chunk.get("metadata", {}).get("title", "未知标题")
+                meta = chunk.get("metadata") or {}
+                file_name = chunk.get("file_name") or meta.get("file_name", "")
+                title = chunk.get("title") or meta.get("title") or file_name or "unknown"
                 content = chunk.get("content", "")
-                chunk_id = chunk.get("id", "")
+                chunk_id = meta.get("chunk_id") or chunk.get("id", "")
             else:
-                title = getattr(chunk, "title", None) or "未知标题"
+                meta = getattr(chunk, "metadata", {}) or {}
+                file_name = getattr(chunk, "file_name", "") or ""
+                title = getattr(chunk, "title", None) or file_name or "unknown"
                 content = getattr(chunk, "content", "")
-                chunk_id = getattr(chunk, "chunk_id", "")
-            context_parts.append(f"[文档 {i}] {title}")
-            context_parts.append(content)
-            context_parts.append("")
+                chunk_id = meta.get("chunk_id") or getattr(chunk, "chunk_id", "")
 
+            # chunk_id 保持原始值，展示用 idx 从末尾取序号
+            try:
+                idx = int(chunk_id.rsplit("_", 1)[-1])
+            except (ValueError, IndexError):
+                idx = i - 1
+
+            prev_index = idx - 1 if idx > 0 else None
+            next_index = idx + 1
+
+            nav_lines = ""
+            nav_lines += f"  <prev_chunk_index>{'null' if prev_index is None else prev_index}</prev_chunk_index>\n"
+            nav_lines += f"  <next_chunk_index>{next_index}</next_chunk_index>\n"
+
+            context_parts.append(
+                f'<source name="{title}">\n'
+                f'<chunk index="{idx}">\n'
+                f"{nav_lines}"
+                f"  <content>\n{content}\n  </content>\n"
+                f"</chunk>\n"
+                f"</source>"
+            )
+        context_parts.append("</knowledge_base>")
         context_text = "\n".join(context_parts)
 
         # ── Detect greeting ──────────────────────────────────────────────────

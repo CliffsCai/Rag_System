@@ -174,13 +174,33 @@ POST /chunks/job/{job_id}/upsert
 ### 2. 文档上传流程（图文模式）
 
 ```
-POST /documents/category/{id}/start-chunking（image_mode=true）
-  → OSSService.get_object_bytes()               # 从 OSS 下载 PDF
-  → DocImageParser.parse_pdf()                  # PyMuPDF 解析，图片上传 OSS
-  → ChunkRepository.bulk_insert()               # 写切片
+POST /documents/upload（image_mode 知识库）或 POST /documents/start-chunking/{category_id}
+  → 判断 collection_config.image_mode = true
+  → OSSService.get_object_bytes()               # 从 OSS 下载文件（类目模式）
+    或直接使用 file_content 字节（单文件模式）
+  → DocImageParser.parse_pdf() / parse_word()   # PyMuPDF/python-docx 解析
+      - 文字块按 (page, y_center) 排序与图片交织
+      - 图片在切分阶段确定 chunk_id 后再上传 OSS（修复：收集阶段不上传）
+      - OSS 路径：rag_image/{collection}/{file_name}/{chunk_id}/{uuid}.{ext}
+      - should_merge 后处理：检测冒号结尾/列表项开头/转折词，合并语义断裂的相邻 chunk
+      - 合并时同步更新 image_records 里的 chunk_id
+      - 智能 overlap：从句子边界开始，不在词中间截断
+  → ChunkRepository.bulk_insert_with_ids()      # 写切片，直接用 parse 返回的 chunk_id
+      - chunk_index 从 chunk_id 末尾 _N 取，保证与 image_records 对应
+      - 不重新 enumerate 编号（避免 should_merge 后序号偏移）
   → ChunkImageRepository.bulk_insert()          # 写图片记录（只存 oss_key）
   → DocumentJobRepository.upsert()              # 写 job 记录
 ```
+
+**chunk_id 设计说明：**
+- 图文模式 chunk_id 格式：`{job_id}_{chunk_idx}`（parse 阶段生成）
+- 存入 `knowledge_chunk_store.chunk_id` 和 `knowledge_chunk_image.chunk_id`
+- upsert 向量库时在 metadata 中额外写入 `chunk_id` 字段，供检索后查图片使用
+- 前端查看切片图片时，通过 `chunk_store` 的 `chunk_index` 字段查出真实 `chunk_id`，再查图片表（不直接拼 `{job_id}_{chunk_index}`，因为 should_merge 后序号可能有空洞）
+
+**OSS 路径规范：**
+- 类目文件：`category/{category_name}/{file_name}`
+- 图文模式图片：`rag_image/{collection}/{file_name}/{chunk_id}/{uuid}.{ext}`
 
 ### 3. RAG 问答流程
 
@@ -296,9 +316,19 @@ Agent 使用 `_AgentProxy` 实现延迟初始化（首次调用时才创建 Lang
 - `ChunkRepository` 新增公开方法 `list_all_job_ids()`
 - `chunk_service.list_all_job_ids()` 不再直接调用 `chunk_repo._execute_select()`，遵守封装原则
 
----
+### 图文模式切分重构（2026）
+- **OSS 路径规范化**：图片路径改为 `rag_image/{collection}/{file_name}/{chunk_id}/{uuid}.{ext}`，与类目文件路径 `category/{category_name}/{file_name}` 并列隔离
+- **修复图片上传时序 bug**：PDF 解析阶段只暂存图片字节，切分遍历确定 `chunk_id` 后再上传 OSS，避免所有图片都传到 `_0` 路径
+- **should_merge 语义合并**：切分后检测冒号结尾、列表项开头、转折词开头，自动合并语义断裂的相邻 chunk，合并时同步更新 `image_records` 里的 `chunk_id`
+- **智能 overlap**：从句子边界（`。？！.?!`）之后开始，不在词中间截断
+- **bulk_insert_with_ids**：图文模式写库时直接使用 `parse_pdf` 返回的 `chunk_id`，`chunk_index` 从 `chunk_id` 末尾取，不重新 enumerate，避免 should_merge 后序号偏移导致图片查询失败
+- **chunk_id 写入 upsert metadata**：向量库 upsert 时在 metadata 中额外写入 `chunk_id`，检索回来后可直接查 `knowledge_chunk_image` 表
+- **图片查询解耦**：`get_chunk_images` / `add_chunk_image` 先从 `chunk_store` 查出真实 `chunk_id`，再操作图片表，不直接拼 `{job_id}_{chunk_index}`
+- **oss_url 编码修复**：`_normalize` 中用 `quote(oss_key, safe='/')` 编码，只编码空格和中文，不编码路径分隔符
+- **知识库/文件名格式校验**：collection 名只允许字母、数字、下划线、连字符、中文；文件名禁止 `/\?#*` 等 OSS 路径敏感字符
+- **RAG context 格式优化**：传给 LLM 的 context 改为 XML 标签格式，`<source>` 包裹 `<chunk>`，含 `prev_chunk_index` / `next_chunk_index`，从 chunk_id 末尾自动计算，不依赖数据库
 
-## 当前已知待完善项
+---
 
 1. `agents/specialized/email/services/email_service.py` — send_email/check_inbox/search_emails 均为 mock，未接入真实 SMTP
 2. `agents/specialized/search/services/search_service.py` — search_web/get_weather/get_news 均为 mock，未接入真实搜索 API

@@ -5,6 +5,7 @@
 存储切片与图片的一对多关联关系
 """
 
+from urllib.parse import quote
 import logging
 import uuid
 from typing import Any, Dict, List, Optional
@@ -166,7 +167,7 @@ class ChunkImageRepository(BaseRepository):
     def _normalize(row: Dict[str, Any]) -> Dict[str, Any]:
         oss_key = row.get("oss_key") or ""
         # oss_url 返回代理接口路径，前端通过后端转发访问私有 OSS 图片
-        oss_url = f"/api/v1/documents/image-proxy?oss_key={oss_key}" if oss_key else ""
+        oss_url = f"/api/v1/documents/image-proxy?oss_key={quote(oss_key, safe='/')}" if oss_key else ""
         return {
             "id": row.get("id"),
             "chunk_id": row.get("chunk_id"),
