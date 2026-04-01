@@ -177,7 +177,7 @@
               </div>
 
               <!-- Confidence arc -->
-              <div v-if="msg.confidence !== undefined" class="confidence-row">
+              <div v-if="msg.confidence !== undefined && msg.confidence !== null && msg.role === 'assistant'" class="confidence-row">
                 <svg class="conf-arc" viewBox="0 0 60 34" fill="none">
                   <path d="M5 30 A25 25 0 0 1 55 30" stroke="rgba(255,255,255,0.08)" stroke-width="5" stroke-linecap="round"/>
                   <path d="M5 30 A25 25 0 0 1 55 30"
@@ -286,6 +286,26 @@ const formatSessionTime = (ts) => {
   return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 
+// 图片 URL 缓存，key=placeholder，value={url, expiresAt}
+// 使用 sessionStorage 持久化到标签页生命周期，关闭即清空
+const IMAGE_CACHE_TTL = 50 * 60 * 1000 // 50分钟，比 OSS 预签名 1小时短
+
+const getCachedUrl = (ph) => {
+  try {
+    const raw = sessionStorage.getItem(`img_cache:${ph}`)
+    if (!raw) return null
+    const { url, expiresAt } = JSON.parse(raw)
+    if (Date.now() > expiresAt) { sessionStorage.removeItem(`img_cache:${ph}`); return null }
+    return url
+  } catch { return null }
+}
+
+const setCachedUrl = (ph, url) => {
+  try {
+    sessionStorage.setItem(`img_cache:${ph}`, JSON.stringify({ url, expiresAt: Date.now() + IMAGE_CACHE_TTL }))
+  } catch {} // sessionStorage 满了也不影响功能
+}
+
 const loadSessions = async () => {
   if (!selectedCollection.value) return
   try {
@@ -318,17 +338,30 @@ const switchSession = async (session) => {
     const histMsgs = res.data.data?.messages || []
     if (!histMsgs.length) return
 
-    // 收集所有占位符，批量 resolve
+    // 收集所有占位符，批量 resolve（优先读缓存，只请求后端未缓存的）
     const allPhs = []
     for (const m of histMsgs) {
       if (m.image_placeholders?.length) allPhs.push(...m.image_placeholders)
     }
     let urlMap = {}
     if (allPhs.length) {
-      try {
-        const rr = await docApi.resolveImages([...new Set(allPhs)])
-        urlMap = rr.data.data || {}
-      } catch {}
+      const uniquePhs = [...new Set(allPhs)]
+      const missedPhs = []
+      for (const ph of uniquePhs) {
+        const cached = getCachedUrl(ph)
+        if (cached) urlMap[ph] = cached
+        else missedPhs.push(ph)
+      }
+      if (missedPhs.length) {
+        try {
+          const rr = await docApi.resolveImages(missedPhs)
+          const fresh = rr.data.data || {}
+          for (const [ph, url] of Object.entries(fresh)) {
+            urlMap[ph] = url
+            setCachedUrl(ph, url)
+          }
+        } catch {}
+      }
     }
 
     for (const m of histMsgs) {
@@ -375,7 +408,7 @@ const modes = [
 ]
 const suggestions = {
   general:   ['你能做什么？', '帮我搜索最新资讯', '发送一封邮件'],
-  knowledge: ['这个知识库包含哪些内容？', '帮我查找相关文档', '总结一下主要知识点'],
+  knowledge: ['如何接受21V的Guest邀请？', '我换了新手机如何重新配置MFA认证？', '阿里网约车如何操作？'],
 }
 
 const canSend = computed(() =>
