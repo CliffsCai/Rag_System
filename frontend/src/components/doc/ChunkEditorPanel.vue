@@ -340,17 +340,28 @@ const load = async () => {
 }
 
 const loadAllImageUrls = async () => {
-  await Promise.all(chunks.value.map(async (row) => {
-    try {
-      const res = await docApi.getChunkImages(props.jobId, row.chunk_index)
-      const images = res.data.data?.images || []
-      const map = {}
-      for (const img of images) {
-        if (img.placeholder && img.oss_url) map[img.placeholder] = img.oss_url
+  // 收集当前页所有切片的占位符，一次批量请求
+  const allPhs = []
+  for (const row of chunks.value) {
+    const phs = parsePlaceholders(row.content)
+    allPhs.push(...phs)
+  }
+  const uniquePhs = [...new Set(allPhs)]
+  if (!uniquePhs.length) return
+
+  try {
+    const res = await docApi.resolveImages(uniquePhs)
+    const urlMap = res.data.data || {}
+    // 原地更新每个 row 的 _imageUrlMap，不替换引用
+    for (const row of chunks.value) {
+      const phs = parsePlaceholders(row.content)
+      for (const ph of phs) {
+        if (urlMap[ph]) row._imageUrlMap[ph] = urlMap[ph]
       }
-      row._imageUrlMap = map
-    } catch { row._imageUrlMap = {} }
-  }))
+    }
+  } catch (e) {
+    console.warn('批量解析图片 URL 失败:', e)
+  }
 }
 
 // ── 校验占位符完整性 ──────────────────────────────────────────────────────────

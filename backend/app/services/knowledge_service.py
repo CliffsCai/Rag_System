@@ -6,27 +6,21 @@ import uuid
 import logging
 from typing import Optional
 
-from langchain_core.messages import HumanMessage, AIMessage
-
 from app.core.config import settings, SUPPORTED_MODELS
 from app.core.exceptions import ValidationError, ExternalServiceError
 
 logger = logging.getLogger(__name__)
 
 
-def invoke_knowledge_qa(
+async def invoke_knowledge_qa(
     query: str,
     model_name: str,
     session_id: str,
     collection: Optional[str] = None,
-    messages: Optional[list] = None,
     force_multi_doc: Optional[bool] = None,
     keyword_filter: Optional[str] = None,
 ) -> dict:
-    """
-    调用 Knowledge Agent 执行 RAG 问答。
-    messages: [{"role": "user"|"assistant", "content": str}]（历史对话，可选）
-    """
+    """调用 Knowledge Agent 执行 RAG 问答。"""
     if model_name not in SUPPORTED_MODELS:
         raise ValidationError(f"Model '{model_name}' not supported. Available: {list(SUPPORTED_MODELS.keys())}")
 
@@ -46,16 +40,8 @@ def invoke_knowledge_qa(
         except Exception as e:
             logger.warning(f"读取 kb retrieval_config 失败，使用默认值: {e}")
 
-    lc_messages = None
-    if messages:
-        lc_messages = []
-        for msg in messages:
-            if msg["role"] == "user":
-                lc_messages.append(HumanMessage(content=msg["content"]))
-            elif msg["role"] == "assistant":
-                lc_messages.append(AIMessage(content=msg["content"]))
-        lc_messages.append(HumanMessage(content=query))
-
+    # LangGraph 通过 checkpointer（thread_id=session_id）自动恢复历史对话，
+    # 无需手动传入历史消息，否则 add_messages reducer 会导致消息重复累加。
     initial_state = create_initial_state(
         query=query,
         user_id="api_user",
@@ -80,21 +66,20 @@ def invoke_knowledge_qa(
             force_multi_doc=force_multi_doc,
             keyword_filter=keyword_filter,
         ),
-        messages=lc_messages,
     )
 
     config = {
         "configurable": {
             "model": model_name,
             "session_id": session_id,
-            "thread_id": f"knowledge_{session_id}_{request_id}",
+            "thread_id": session_id,  # LangGraph 用 session_id 作为 thread_id 实现对话记忆
         }
     }
 
     logger.info("处理 knowledge 请求", extra={"session_id": session_id, "request_id": request_id})
 
     try:
-        result = agent.invoke(initial_state, config=config)
+        result = await agent.ainvoke(initial_state, config=config)
     except Exception as e:
         raise ExternalServiceError(f"Knowledge Agent 调用失败: {e}") from e
 
@@ -109,10 +94,10 @@ def invoke_knowledge_qa(
             "chunks_retrieved": metrics.total_chunks_retrieved if hasattr(metrics, "total_chunks_retrieved") else 0,
             "chunks_used": metrics.chunks_after_rerank if hasattr(metrics, "chunks_after_rerank") else 0,
         },
-        "conversation_turns": len(lc_messages) if lc_messages else 1,
+        "conversation_turns": 1,
     }
 
-    return {
+    return_data = {
         "request_id": request_id,
         "session_id": session_id,
         "answer": result["answer"],
@@ -122,3 +107,34 @@ def invoke_knowledge_qa(
         "thoughts": thoughts,
         "image_map": result.get("image_map") or None,
     }
+
+    # 持久化消息到 conversation_message 表（仅当 session_id 对应真实会话时）
+    try:
+        from app.db import get_conversation_repository
+        import re as _re
+        conv_repo = get_conversation_repository()
+        if conv_repo.get_session(session_id):
+            # 提取 answer 里的占位符
+            answer_text = result["answer"] or ""
+            phs = list(set(_re.findall(r'<<IMAGE:[0-9a-f]+>>', answer_text)))
+
+            # 存用户消息
+            conv_repo.add_message(
+                session_id=session_id,
+                role="user",
+                content=query,
+            )
+            # 存 assistant 消息（content 存占位符原文，不存 URL）
+            conv_repo.add_message(
+                session_id=session_id,
+                role="assistant",
+                content=answer_text,
+                sources=result.get("sources") or [],
+                confidence=result.get("confidence"),
+                image_placeholders=phs,
+            )
+            conv_repo.touch_session(session_id)
+    except Exception as _e:
+        logger.warning(f"消息持久化失败（不影响回答）: {_e}")
+
+    return return_data

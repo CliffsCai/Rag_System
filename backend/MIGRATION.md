@@ -51,14 +51,14 @@ ALIBABA_CLOUD_ACCESS_KEY_SECRET=xxxx
 MILVUS_HOST=localhost
 MILVUS_PORT=19530
 MILVUS_USER=root
-MILVUS_PASSWORD=Milvus
+MILVUS_PASSWORD=your_milvus_password
 
 # PostgreSQL（Docker 默认值，通常不需要改）
 PG_HOST=localhost
 PG_PORT=5432
 PG_DB=knowledge_db
-PG_USER=kbuser
-PG_PASSWORD=kbpass
+PG_USER=your_pg_user
+PG_PASSWORD=your_pg_password
 
 # Embedding（可选，默认 text-embedding-v3）
 EMBEDDING_MODEL=text-embedding-v3

@@ -21,6 +21,8 @@ openai
 
 # 数据库 - PostgreSQL
 psycopg2-binary>=2.9.0
+psycopg[binary]>=3.1.0          # LangGraph checkpoint 专用（psycopg3，与 psycopg2 共存）
+langgraph-checkpoint-postgres>=2.0.0
 
 # 向量数据库 - Milvus
 pymilvus>=2.5.0

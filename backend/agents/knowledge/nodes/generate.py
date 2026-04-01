@@ -105,9 +105,13 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
                         ph = r.get("placeholder", "")
                         ok = r.get("oss_key", "")
                         chunk_image_map.setdefault(r["chunk_id"], []).append(r)
-                        if ok:
-                            from urllib.parse import quote
-                            image_map[ph] = f"/api/v1/documents/image-proxy?oss_key={quote(ok, safe='/')}"
+                        if ok and ph:
+                            try:
+                                from app.services.oss_service import get_oss_service
+                                image_map[ph] = get_oss_service().get_presigned_url(ok, expires=3600)
+                            except Exception as _e:
+                                from urllib.parse import quote
+                                image_map[ph] = f"/api/v1/documents/image-proxy?oss_key={quote(ok, safe='/')}"
                     print(f"[Generate] 图文模式: {len(img_records)} 条图片记录, image_map {len(image_map)} 条")
             except Exception as e:
                 import traceback

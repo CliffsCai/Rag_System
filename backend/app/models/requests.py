@@ -27,7 +27,6 @@ class KnowledgeRequest(BaseModel):
     query: str
     session_id: str = "default"
     model: Optional[str] = None
-    messages: Optional[List[Dict[str, str]]] = None
     collection: Optional[str] = None          # 指定知识库，不传则用默认
     force_multi_doc: Optional[bool] = None    # True=强制多文档，None=LLM 判断
     keyword_filter: Optional[str] = None      # 有值=强制 KEYWORD_ONLY + TEXT_MATCH 预过滤

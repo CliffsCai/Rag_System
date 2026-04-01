@@ -6,10 +6,12 @@ _agent = None
 
 
 def get_knowledge_agent():
-    """获取 Knowledge Agent 实例（延迟初始化，模块级缓存）"""
+    """获取 Knowledge Agent 实例（延迟初始化，注入 PostgresSaver checkpointer）"""
     global _agent
     if _agent is None:
-        _agent = create_knowledge_agent()
+        from app.core.checkpointer import get_checkpointer
+        checkpointer = get_checkpointer()
+        _agent = create_knowledge_agent(checkpointer=checkpointer)
     return _agent
 
 

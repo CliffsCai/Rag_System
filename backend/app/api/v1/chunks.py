@@ -136,3 +136,16 @@ async def add_chunk_image(
 async def delete_chunk_image(job_id: str, chunk_index: int, image_id: str):
     chunk_service.delete_chunk_image(job_id, chunk_index, image_id)
     return JSONResponse(content={"success": True, "message": "图片已删除"})
+
+
+# ── 占位符解析 ────────────────────────────────────────────────────────────────
+
+class ResolveImagesRequest(BaseModel):
+    placeholders: list[str]
+
+
+@router.post("/resolve-images")
+async def resolve_images(body: ResolveImagesRequest):
+    """批量将占位符解析为预签名 URL，用于历史对话图片展示"""
+    result = chunk_service.resolve_image_placeholders(body.placeholders)
+    return JSONResponse(content={"success": True, "data": result})

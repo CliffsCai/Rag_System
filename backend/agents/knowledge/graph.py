@@ -70,12 +70,14 @@ def should_check_quality(state: KnowledgeAgentState) -> Literal["check_quality",
     return "check_quality" if config.enable_fallback else "finalize_metrics"
 
 
-def create_knowledge_agent():
+def create_knowledge_agent(checkpointer=None):
     """
     创建 Knowledge Agent
 
+    Args:
+        checkpointer: LangGraph checkpointer（AsyncPostgresSaver 或 MemorySaver）
     Returns:
-        Compiled LangGraph agent with memory
+        Compiled LangGraph agent
     """
     print("\n[Graph] Building Knowledge Agent")
 
@@ -128,7 +130,7 @@ def create_knowledge_agent():
     builder.add_edge("check_quality", "finalize_metrics")
     builder.add_edge("finalize_metrics", END)
 
-    graph = builder.compile()
+    graph = builder.compile(checkpointer=checkpointer)
 
     print("[Graph] Knowledge Agent created")
     print("[Graph] single_doc: rewrite→classify→strategy→single_retrieve(Milvus hybrid)→relevance_filter→generate")

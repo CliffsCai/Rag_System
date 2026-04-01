@@ -70,4 +70,18 @@ export const docApi = {
   createCollection: (data) => axios.post(`${BASE}/admin/collections`, data),
   updateCollection: (kbName, data) => axios.put(`${BASE}/admin/collections/${kbName}`, data),
   deleteCollection: (kbName) => axios.delete(`${BASE}/admin/collections/${kbName}`),
+
+  // ── 图片占位符解析 ────────────────────────────────────────────────────────
+  resolveImages: (placeholders) =>
+    axios.post(`${BASE}/chunks/resolve-images`, { placeholders }),
+
+  // ── 对话会话 ──────────────────────────────────────────────────────────────
+  listSessions: (kbName, userId = 'default') =>
+    axios.get(`${BASE}/conversations`, { params: { kb_name: kbName, user_id: userId } }),
+  createSession: (kbName, title = '新会话', userId = 'default') =>
+    axios.post(`${BASE}/conversations`, { kb_name: kbName, title, user_id: userId }),
+  getSessionMessages: (sessionId, limit = 100) =>
+    axios.get(`${BASE}/conversations/${sessionId}/messages`, { params: { limit } }),
+  deleteSession: (sessionId) =>
+    axios.delete(`${BASE}/conversations/${sessionId}`),
 }

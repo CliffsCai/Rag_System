@@ -3,7 +3,6 @@
 切片图片仓储
 表：knowledge_chunk_image
 """
-from urllib.parse import quote
 import logging
 from typing import Any, Dict, List, Optional
 from app.db.base_repository import BaseRepository
@@ -66,6 +65,16 @@ class ChunkImageRepository(BaseRepository):
         )
         return [self._normalize(r) for r in rows]
 
+    def get_by_placeholders(self, placeholders: List[str]) -> List[Dict[str, Any]]:
+        if not placeholders:
+            return []
+        ph_params = ",".join(["%s"] * len(placeholders))
+        rows = self._execute_select(
+            f"SELECT * FROM knowledge_chunk_image WHERE placeholder IN ({ph_params})",
+            tuple(placeholders),
+        )
+        return [self._normalize(r) for r in rows]
+
     def get_oss_keys_by_job(self, job_id: str) -> List[str]:
         """通过 job_id 关联 chunk 查图片 oss_key"""
         rows = self._execute_select(
@@ -109,13 +118,12 @@ class ChunkImageRepository(BaseRepository):
     @staticmethod
     def _normalize(row: Dict[str, Any]) -> Dict[str, Any]:
         oss_key = row.get("oss_key") or ""
-        oss_url = f"/api/v1/documents/image-proxy?oss_key={quote(oss_key, safe='/')}" if oss_key else ""
         return {
             "id": str(row["id"]),
             "chunk_id": str(row["chunk_id"]),
             "placeholder": row.get("placeholder", ""),
             "oss_key": oss_key,
-            "oss_url": oss_url,
+            "oss_url": "",   # 由 service 层按需生成预签名 URL，repository 不依赖 oss_service
             "page": row.get("page"),
             "sort_order": row.get("sort_order", 0),
             "created_at": str(row["created_at"]) if row.get("created_at") else None,

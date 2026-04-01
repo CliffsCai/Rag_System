@@ -42,3 +42,7 @@ Thumbs.db
 
 # LangGraph
 .langgraph/
+
+# Internal docs
+ARCHITECTURE.md
+MIGRATION.md

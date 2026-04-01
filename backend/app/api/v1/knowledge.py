@@ -13,12 +13,11 @@ router = APIRouter(prefix="/knowledge")
 async def knowledge_qa(request: KnowledgeRequest):
     """RAG 问答，完整流水线：改写→分类→检索→过滤→重排→生成→质量检查"""
     model_name = request.model or settings.default_model
-    result = invoke_knowledge_qa(
+    result = await invoke_knowledge_qa(
         query=request.query,
         model_name=model_name,
         session_id=request.session_id,
         collection=request.collection or None,
-        messages=request.messages or None,
         force_multi_doc=request.force_multi_doc,
         keyword_filter=request.keyword_filter or None,
     )

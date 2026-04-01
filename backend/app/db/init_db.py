@@ -132,6 +132,35 @@ _TABLES = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_chunk_image_chunk ON knowledge_chunk_image(chunk_id)",
+    "CREATE INDEX IF NOT EXISTS idx_chunk_image_placeholder ON knowledge_chunk_image(placeholder)",
+
+    # 9. 对话会话元数据
+    """
+    CREATE TABLE IF NOT EXISTS conversation_session (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     TEXT NOT NULL DEFAULT 'default',
+        kb_name     TEXT NOT NULL,
+        title       TEXT NOT NULL DEFAULT '新会话',
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_conv_session_user_kb ON conversation_session(user_id, kb_name, updated_at DESC)",
+
+    # 10. 对话消息（业务展示层，独立于 LangGraph checkpoint）
+    """
+    CREATE TABLE IF NOT EXISTS conversation_message (
+        id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        session_id          UUID NOT NULL REFERENCES conversation_session(id) ON DELETE CASCADE,
+        role                TEXT NOT NULL,
+        content             TEXT NOT NULL,
+        sources             JSONB,
+        confidence          FLOAT,
+        image_placeholders  TEXT[] NOT NULL DEFAULT '{}',
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_conv_message_session ON conversation_message(session_id, created_at)",
 ]
 
 
@@ -161,6 +190,20 @@ def init_db() -> None:
         )
     except Exception as e:
         logger.warning(f"创建 __default__ 类目失败（可忽略）: {e}")
+
+    # 初始化 LangGraph PostgresSaver checkpoint 表（幂等）
+    try:
+        from app.core.config import settings as _s
+        import psycopg
+        conn_str = f"postgresql://{_s.pg_user}:{_s.pg_password}@{_s.pg_host}:{_s.pg_port}/{_s.pg_db}"
+        with psycopg.connect(conn_str, autocommit=True) as conn:
+            from langgraph.checkpoint.postgres import PostgresSaver
+            from psycopg.rows import dict_row
+            saver = PostgresSaver(conn)
+            saver.setup()
+        logger.info("LangGraph checkpoint 表初始化完成")
+    except Exception as e:
+        logger.warning(f"LangGraph checkpoint 表初始化失败（可忽略，首次安装需先 pip install）: {e}")
 
     logger.info("数据库表初始化完成")
 

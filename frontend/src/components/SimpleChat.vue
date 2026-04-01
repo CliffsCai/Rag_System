@@ -1,8 +1,45 @@
 <template>
   <div class="chat-wrapper">
+    <!-- 知识库模式：会话侧边栏 -->
+    <transition name="sidebar-slide">
+      <div v-if="chatMode === 'knowledge' && sidebarOpen" class="session-sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-title">对话列表</span>
+          <button class="sidebar-new-btn" @click="createNewSession" :disabled="!selectedCollection">
+            <svg viewBox="0 0 16 16" fill="none"><line x1="8" y1="2" x2="8" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            新建
+          </button>
+        </div>
+        <div class="session-list">
+          <div v-if="sessions.length === 0" class="session-empty">暂无会话</div>
+          <div
+            v-for="s in sessions" :key="s.id"
+            class="session-item" :class="{ active: currentSessionId === s.id }"
+            @click="switchSession(s)"
+          >
+            <div class="session-item-title">{{ s.title }}</div>
+            <div class="session-item-meta">{{ s.message_count }} 条 · {{ formatSessionTime(s.updated_at) }}</div>
+            <button class="session-delete-btn" @click.stop="deleteSession(s.id)" title="删除会话">
+              <svg viewBox="0 0 10 10" fill="none"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <div class="chat-main" :class="{ 'sidebar-expanded': chatMode === 'knowledge' && sidebarOpen }">
     <!-- Toolbar -->
     <div class="chat-toolbar">
       <div class="mode-tabs">
+        <button v-if="chatMode === 'knowledge'" class="icon-btn sidebar-toggle-btn"
+          :class="{ active: sidebarOpen }" @click="sidebarOpen = !sidebarOpen" title="会话列表">
+          <svg viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="2" width="5" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
+            <line x1="9" y1="5" x2="15" y2="5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="9" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="9" y1="11" x2="13" y2="11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
         <button v-for="m in modes" :key="m.value"
           class="mode-tab" :class="{ active: chatMode === m.value }"
           @click="chatMode = m.value">
@@ -199,13 +236,15 @@
         </transition>
       </button>
     </div>
-  </div>
+  </div><!-- end chat-main -->
+  </div><!-- end chat-wrapper -->
 </template>
 
 <script setup>
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { apiService } from '../services/api'
+import { docApi } from '../services/docApi'
 import axios from 'axios'
 import MarkdownIt from 'markdown-it'
 
@@ -229,6 +268,105 @@ const keywordFilter = ref('')
 const toggleKeywordFilter = () => {
   keywordFilterEnabled.value = !keywordFilterEnabled.value
   if (!keywordFilterEnabled.value) keywordFilter.value = ''
+}
+
+// 会话管理
+const sidebarOpen = ref(true)
+const sessions = ref([])
+const currentSessionId = ref('')
+
+const formatSessionTime = (ts) => {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const now = new Date()
+  const diff = now - d
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
+  return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+}
+
+const loadSessions = async () => {
+  if (!selectedCollection.value) return
+  try {
+    const res = await docApi.listSessions(selectedCollection.value)
+    sessions.value = res.data.data?.sessions || []
+  } catch (e) {
+    console.warn('加载会话列表失败:', e)
+  }
+}
+
+const createNewSession = async () => {
+  if (!selectedCollection.value) return
+  try {
+    const res = await docApi.createSession(selectedCollection.value)
+    const session = res.data.data
+    sessions.value.unshift(session)
+    await switchSession(session)
+  } catch (e) {
+    ElMessage.error('创建会话失败')
+  }
+}
+
+const switchSession = async (session) => {
+  if (currentSessionId.value === session.id) return
+  currentSessionId.value = session.id
+  messages.value = []
+  // 加载历史消息
+  try {
+    const res = await docApi.getSessionMessages(session.id)
+    const histMsgs = res.data.data?.messages || []
+    if (!histMsgs.length) return
+
+    // 收集所有占位符，批量 resolve
+    const allPhs = []
+    for (const m of histMsgs) {
+      if (m.image_placeholders?.length) allPhs.push(...m.image_placeholders)
+    }
+    let urlMap = {}
+    if (allPhs.length) {
+      try {
+        const rr = await docApi.resolveImages([...new Set(allPhs)])
+        urlMap = rr.data.data || {}
+      } catch {}
+    }
+
+    for (const m of histMsgs) {
+      let content = m.content
+      // 替换占位符为图片 markdown
+      if (m.image_placeholders?.length) {
+        for (const ph of m.image_placeholders) {
+          if (urlMap[ph]) content = content.split(ph).join(`\n![image](${urlMap[ph]})\n`)
+        }
+      }
+      messages.value.push({
+        role: m.role,
+        isHtml: m.role === 'assistant',
+        content: m.role === 'assistant' ? md.render(content) : content,
+        confidence: m.confidence,
+        sources: m.sources || [],
+        _showSources: false,
+        timestamp: new Date(m.created_at),
+      })
+    }
+    scrollToBottom()
+  } catch (e) {
+    console.warn('加载历史消息失败:', e)
+  }
+}
+
+const deleteSession = async (sessionId) => {
+  try {
+    await docApi.deleteSession(sessionId)
+    sessions.value = sessions.value.filter(s => s.id !== sessionId)
+    if (currentSessionId.value === sessionId) {
+      currentSessionId.value = ''
+      messages.value = []
+    }
+    ElMessage.success('会话已删除')
+  } catch (e) {
+    ElMessage.error('删除失败')
+  }
 }
 
 const modes = [
@@ -260,7 +398,7 @@ const sendMessage = async () => {
   try {
     if (chatMode.value === 'knowledge') {
       const res = await apiService.knowledgeQA(
-        text, props.model, 'default', selectedCollection.value || null,
+        text, props.model, currentSessionId.value || 'default', selectedCollection.value || null,
         forceMultiDoc.value || null,
         (keywordFilterEnabled.value && keywordFilter.value) ? keywordFilter.value : null,
       )
@@ -289,8 +427,13 @@ const sendMessage = async () => {
   } finally { loading.value = false; scrollToBottom() }
 }
 
-const clearMessages = () => { messages.value = [] }
-watch(chatMode, () => { messages.value = [] })
+const clearMessages = () => { messages.value = []; currentSessionId.value = '' }
+watch(chatMode, () => { messages.value = []; currentSessionId.value = '' })
+watch(selectedCollection, async (val) => {
+  messages.value = []
+  currentSessionId.value = ''
+  if (val) await loadSessions()
+})
 const formatTime = (t) => new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const uniqueFileNames = (sources) => {
   const seen = new Set()
@@ -305,7 +448,10 @@ onMounted(async () => {
   try {
     const { data } = await axios.get(`${API}/admin/collections`)
     collections.value = data.data?.collections || []
-    if (collections.value.length > 0) selectedCollection.value = collections.value[0].name
+    if (collections.value.length > 0) {
+      selectedCollection.value = collections.value[0].name
+      await loadSessions()
+    }
   } catch {}
 })
 defineExpose({ clearMessages })
@@ -314,13 +460,75 @@ defineExpose({ clearMessages })
 <style scoped>
 /* ── Layout ── */
 .chat-wrapper {
-  display: flex; flex-direction: column;
+  display: flex; flex-direction: row;
   height: calc(100vh - 108px);
   background: rgba(255,255,255,0.025);
   border: 1px solid rgba(255,255,255,0.09);
   border-radius: 18px; overflow: hidden;
   box-shadow: 0 8px 40px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04) inset;
 }
+.chat-main {
+  display: flex; flex-direction: column; flex: 1; min-width: 0;
+}
+
+/* ── Session Sidebar ── */
+.session-sidebar {
+  width: 200px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  background: rgba(0,0,0,0.15);
+  border-right: 1px solid rgba(255,255,255,0.06);
+}
+.sidebar-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.sidebar-title { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.4); letter-spacing: 0.5px; }
+.sidebar-new-btn {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 6px; border: none; cursor: pointer;
+  font-size: 11px; font-weight: 600; color: #7eb3ff;
+  background: rgba(79,142,247,0.12);
+  transition: background 0.2s;
+}
+.sidebar-new-btn:hover { background: rgba(79,142,247,0.22); }
+.sidebar-new-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.sidebar-new-btn svg { width: 10px; height: 10px; }
+.session-list { flex: 1; overflow-y: auto; padding: 6px 6px; }
+.session-list::-webkit-scrollbar { width: 3px; }
+.session-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.07); border-radius: 99px; }
+.session-empty { font-size: 11px; color: rgba(255,255,255,0.2); text-align: center; padding: 20px 0; }
+.session-item {
+  position: relative; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+  margin-bottom: 2px;
+  transition: background 0.15s;
+}
+.session-item:hover { background: rgba(255,255,255,0.05); }
+.session-item.active { background: rgba(79,142,247,0.12); }
+.session-item-title {
+  font-size: 12px; font-weight: 500; color: rgba(255,255,255,0.7);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  padding-right: 18px;
+}
+.session-item-meta { font-size: 10px; color: rgba(255,255,255,0.25); margin-top: 2px; }
+.session-delete-btn {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; border-radius: 4px; border: none; cursor: pointer;
+  background: transparent; color: rgba(255,255,255,0.2);
+  display: flex; align-items: center; justify-content: center; padding: 2px;
+  opacity: 0; transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.session-item:hover .session-delete-btn { opacity: 1; }
+.session-delete-btn:hover { background: rgba(240,107,107,0.2); color: #f06b6b; }
+.session-delete-btn svg { width: 100%; height: 100%; }
+.sidebar-toggle-btn { margin-right: 4px; }
+.sidebar-toggle-btn.active { color: #7eb3ff; background: rgba(79,142,247,0.12); }
+
+/* sidebar slide transition */
+.sidebar-slide-enter-active { transition: width 0.25s cubic-bezier(0.4,0,0.2,1), opacity 0.2s; }
+.sidebar-slide-leave-active { transition: width 0.2s cubic-bezier(0.4,0,1,1), opacity 0.15s; }
+.sidebar-slide-enter-from { width: 0; opacity: 0; }
+.sidebar-slide-leave-to { width: 0; opacity: 0; }
 
 /* ── Toolbar ── */
 .chat-toolbar {

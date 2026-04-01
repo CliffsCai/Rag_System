@@ -163,7 +163,16 @@ def get_chunk_images(job_id: str, chunk_index: int) -> list:
     chunk = get_chunk_repository().get_by_job_and_index(job_id, chunk_index)
     if not chunk:
         return []
-    return get_chunk_image_repository().get_by_chunk(chunk["chunk_id"])
+    records = get_chunk_image_repository().get_by_chunk(chunk["chunk_id"])
+    oss_svc = get_oss_service()
+    for r in records:
+        if r.get("oss_key"):
+            try:
+                r["oss_url"] = oss_svc.get_presigned_url(r["oss_key"], expires=3600)
+            except Exception as e:
+                logger.warning(f"生成预签名 URL 失败: {r['oss_key']}, {e}")
+                r["oss_url"] = ""
+    return records
 
 
 def add_chunk_image(
@@ -192,10 +201,13 @@ def add_chunk_image(
 
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
     chunk_id = chunk["chunk_id"]
+    # 占位符 hex 作为 OSS 路径唯一 ID，与知识库文件生命周期解耦
+    placeholder_hex = uuid.uuid4().hex[:8]
+    placeholder = f"<<IMAGE:{placeholder_hex}>>"
     try:
         oss_key = get_oss_service().upload_file(
-            f"rag_image/{kb_name}/{file_name_str}/{chunk_id}",
-            f"{uuid.uuid4().hex[:12]}.{ext}",
+            f"conversation_assets/{placeholder_hex}",
+            f"image.{ext}",
             file_content,
         )
     except Exception as e:
@@ -203,7 +215,6 @@ def add_chunk_image(
 
     img_repo = get_chunk_image_repository()
     sort_order = len(img_repo.get_by_chunk(chunk_id))
-    placeholder = f"<<IMAGE:{uuid.uuid4().hex[:8]}>>"
     record = img_repo.insert(
         chunk_id=chunk_id,
         job_id=job_id,
@@ -212,6 +223,13 @@ def add_chunk_image(
         page=page,
         sort_order=sort_order,
     )
+
+    # 生成预签名 URL 供前端立即显示
+    try:
+        record["oss_url"] = get_oss_service().get_presigned_url(oss_key, expires=3600)
+    except Exception as e:
+        logger.warning(f"生成预签名 URL 失败: {oss_key}, {e}")
+        record["oss_url"] = ""
 
     content = chunk.get("current_content") or ""
     pos = max(0, min(insert_position, len(content)))
@@ -242,3 +260,25 @@ def delete_chunk_image(job_id: str, chunk_index: int, image_id: str) -> None:
         if chunk:
             new_content = (chunk.get("current_content") or "").replace(placeholder, "")
             chunk_repo.update_content_by_index(job_id, chunk_index, new_content, status="edited")
+
+
+def resolve_image_placeholders(placeholders: list) -> dict:
+    """
+    批量将占位符解析为预签名 URL。
+    返回 {placeholder: presigned_url} 字典，找不到的占位符不包含在结果里。
+    """
+    if not placeholders:
+        return {}
+    img_repo = get_chunk_image_repository()
+    records = img_repo.get_by_placeholders(placeholders)
+    oss_svc = get_oss_service()
+    result = {}
+    for r in records:
+        ph = r.get("placeholder", "")
+        ok = r.get("oss_key", "")
+        if ph and ok:
+            try:
+                result[ph] = oss_svc.get_presigned_url(ok, expires=3600)
+            except Exception as e:
+                logger.warning(f"resolve_image_placeholders: 生成预签名 URL 失败 {ok}: {e}")
+    return result

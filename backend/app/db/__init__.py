@@ -7,6 +7,7 @@ from .category_repository import get_category_repository, CategoryRepository
 from .category_file_repository import get_category_file_repository, CategoryFileRepository
 from .chunk_repository import get_chunk_repository, ChunkRepository
 from .chunk_image_repository import get_chunk_image_repository, ChunkImageRepository
+from .conversation_repository import get_conversation_repository, ConversationRepository
 
 __all__ = [
     "get_kb_repository", "KbRepository",
@@ -16,4 +17,5 @@ __all__ = [
     "get_category_file_repository", "CategoryFileRepository",
     "get_chunk_repository", "ChunkRepository",
     "get_chunk_image_repository", "ChunkImageRepository",
+    "get_conversation_repository", "ConversationRepository",
 ]

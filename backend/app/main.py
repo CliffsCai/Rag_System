@@ -36,8 +36,13 @@ async def lifespan(app: FastAPI):
     logger.info("应用启动中，初始化数据库表...")
     from app.db.init_db import init_db
     init_db()
+    logger.info("初始化 LangGraph checkpointer...")
+    from app.core.checkpointer import init_checkpointer
+    await init_checkpointer()
     logger.info("应用启动完成")
     yield
+    from app.core.checkpointer import close_checkpointer
+    await close_checkpointer()
     logger.info("应用已关闭")
 
 
