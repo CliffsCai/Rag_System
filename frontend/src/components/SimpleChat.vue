@@ -116,7 +116,7 @@
     </div>
 
     <!-- Messages -->
-    <div class="messages" ref="messagesContainer">
+    <div class="messages" ref="messagesContainer" @click="e => { if (e.target.tagName === 'IMG') openLightbox(e.target.src) }">
       <!-- Welcome screen -->
       <transition name="fade">
         <div v-if="messages.length === 0" class="welcome-screen">
@@ -238,6 +238,18 @@
     </div>
   </div><!-- end chat-main -->
   </div><!-- end chat-wrapper -->
+
+  <!-- Lightbox -->
+  <teleport to="body">
+    <transition name="lightbox-fade">
+      <div v-if="lightbox.show" class="lightbox-overlay" @click="lightbox.show = false">
+        <button class="lightbox-close" @click="lightbox.show = false">
+          <svg viewBox="0 0 16 16" fill="none"><line x1="2" y1="2" x2="14" y2="14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="2" x2="2" y2="14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <img :src="lightbox.src" class="lightbox-img" @click.stop />
+      </div>
+    </transition>
+  </teleport>
 </template>
 
 <script setup>
@@ -274,6 +286,14 @@ const toggleKeywordFilter = () => {
 const sidebarOpen = ref(true)
 const sessions = ref([])
 const currentSessionId = ref('')
+
+// Lightbox
+const lightbox = ref({ show: false, src: '' })
+const openLightbox = (src) => { lightbox.value = { show: true, src } }
+
+// 键盘关闭 lightbox
+const onKeydown = (e) => { if (e.key === 'Escape') lightbox.value.show = false }
+window.addEventListener('keydown', onKeydown)
 
 const formatSessionTime = (ts) => {
   if (!ts) return ''
@@ -883,20 +903,25 @@ defineExpose({ clearMessages })
 .bubble-text :deep(a) { color: #7eb3ff; text-decoration: none; }
 .bubble-text :deep(a:hover) { text-decoration: underline; }
 .bubble-text :deep(img) {
-  max-width: 100%; border-radius: 10px; margin: 8px 0; display: block;
+  max-width: 100%;
+  max-height: 280px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 10px;
+  margin: 8px 0;
+  display: block;
   border: 1px solid rgba(255,255,255,0.08);
   box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-  /* 轻压暗 + 微提对比，照片不失真 */
   filter: brightness(0.92) contrast(1.04);
-  /* 白底图表与暗背景融合 */
   mix-blend-mode: luminosity;
-  transition: filter 0.2s, transform 0.2s;
+  transition: filter 0.2s, transform 0.2s, box-shadow 0.2s;
   cursor: zoom-in;
 }
 .bubble-text :deep(img:hover) {
   filter: brightness(1) contrast(1.06);
   mix-blend-mode: normal;
-  transform: scale(1.01);
+  transform: scale(1.02);
   box-shadow: 0 8px 32px rgba(0,0,0,0.6);
 }
 .bubble-text :deep(hr) { border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 10px 0; }
@@ -1031,4 +1056,35 @@ defineExpose({ clearMessages })
 .icon-swap-enter-active,.icon-swap-leave-active { transition: all 0.18s cubic-bezier(0.4,0,0.2,1); }
 .icon-swap-enter-from { opacity: 0; transform: scale(0.7) rotate(-90deg); }
 .icon-swap-leave-to { opacity: 0; transform: scale(0.7) rotate(90deg); }
+
+/* Lightbox */
+.lightbox-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,0.85);
+  display: flex; align-items: center; justify-content: center;
+  cursor: zoom-out;
+  backdrop-filter: blur(6px);
+}
+.lightbox-img {
+  max-width: 90vw; max-height: 90vh;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.8);
+  cursor: default;
+  filter: brightness(1) contrast(1.04);
+}
+.lightbox-close {
+  position: fixed; top: 20px; right: 24px;
+  width: 36px; height: 36px;
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 50%;
+  color: #fff; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.2s;
+}
+.lightbox-close:hover { background: rgba(255,255,255,0.2); }
+.lightbox-close svg { width: 14px; height: 14px; }
+.lightbox-fade-enter-active, .lightbox-fade-leave-active { transition: opacity 0.2s ease; }
+.lightbox-fade-enter-from, .lightbox-fade-leave-to { opacity: 0; }
 </style>
