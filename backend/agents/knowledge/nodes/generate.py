@@ -202,8 +202,8 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
         print(f"[Generate] model={model_name}, multimodal={is_multimodal_kb}, has_image={bool(query_image_url)}")
 
         # ── LLM call ─────────────────────────────────────────────────────────
-        if is_multimodal_kb and query_image_url:
-            # 多模态：用 MultiModalConversation.call（支持图片 URL）
+        if is_multimodal_kb:
+            # 多模态知识库统一走 MultiModalConversation.call（qwen3.5-plus 是视觉模型，不支持 Generation.call）
             from dashscope import MultiModalConversation
             response = MultiModalConversation.call(
                 api_key=api_key,

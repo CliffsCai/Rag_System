@@ -42,7 +42,14 @@ Thumbs.db
 
 # LangGraph
 .langgraph/
+.langgraph_api/
 
-# Internal docs
-ARCHITECTURE.md
-MIGRATION.md
+# Logs
+*.log
+logs/
+
+# Test / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
