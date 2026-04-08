@@ -169,11 +169,13 @@ conversation_session (user_id, kb_name)
 | `job_id` | VARCHAR | 关联 PG knowledge_job.id |
 | `file_name` | VARCHAR | 文件名 |
 | `chunk_index` | INT64 | 切片序号 |
-| `content` | VARCHAR | 文本内容（enable_analyzer + enable_match，中文分析器） |
+| `content` | VARCHAR | 纯文本内容（已剥离图片占位符，enable_analyzer + enable_match，中文分析器） |
 | `sparse_bm25` | SPARSE_FLOAT_VECTOR | BM25 Function 自动生成 |
 | `dense` | FLOAT_VECTOR(dim) | DashScope embedding，dim 由知识库配置决定 |
 | `[metadata_fields]` | VARCHAR | 用户配置的 fulltext 字段（如 title），enable_match=True |
 | dynamic fields | - | 其他 metadata |
+
+> **注意**：Milvus `content` 字段存储的是 `fulltext前缀 + 剥离占位符后的纯文本`，不含 `<<IMAGE:xxx>>` 占位符，避免污染向量和 BM25 索引。检索命中后，`hybrid_search` 会批量回填 PG `knowledge_chunk.content`（含占位符的原始内容），供 generate 节点构建 LLM context 时使用。
 
 索引：HNSW（dense）+ SPARSE_WAND（sparse_bm25）
 
@@ -226,9 +228,9 @@ run_job_pipeline():
     ← 停在此状态，等待人工审查后手动触发向量化
 
 POST /chunks/job/{job_id}/upsert（手动触发）
-  → 读 PG chunks → embed（按 kb 的 embedding_model + vector_dim）
-  → fulltext 字段拼接到 content 前（BM25 + dense 都感知）
-  → upsert Milvus → mark_vectorized → done
+  → 读 PG chunks → 剥离图片占位符（<<IMAGE:xxx>>）得到 clean_content
+  → fulltext 字段拼接到 clean_content 前（BM25 + dense 都感知，但不含占位符噪音）
+  → embed → upsert Milvus（content 存 fulltext前缀+clean_content）→ mark_vectorized → done
 ```
 
 ### 2. RAG 问答流程
@@ -284,6 +286,11 @@ query_rewrite（多轮指代消解）→ query_classify → determine_retrieval_
     single_doc → single_doc_retrieve → generate_answer
     multi_doc  → multi_doc_retrieve（分组搜索 group_by_field=file_name）
                → filter_chunks → rerank_chunks → generate_answer
+
+  [检索后处理]
+  hybrid_search 返回 hits 后，批量查 PG knowledge_chunk（WHERE id IN chunk_ids），
+  将 current_content（含图片占位符）回填到 hits[].content，
+  确保 generate 节点拿到的是含占位符的原始内容，而非 Milvus 中的 clean 版本。
   ↓
   generate_answer（从 state.messages 读历史上下文；图文模式：查 chunk_image，生成预签名 URL 填入 image_map）
   → quality_check → finalize_metrics
@@ -293,12 +300,12 @@ query_rewrite（多轮指代消解）→ query_classify → determine_retrieval_
 ```
 有历史（state.messages[:-1] 非空）：
   - 使用 KNOWLEDGE_QUERY_REWRITE_WITH_HISTORY_SYSTEM prompt
-  - 取最近 3 轮历史（6条消息）拼入 prompt
-  - 将代词指代（"它"、"这个"等）替换为历史中的明确实体
-  - 使问题独立完整，便于向量检索
+  - 取最近 memory_turns 轮历史（默认 2 轮，即 4 条消息），可在 kb.retrieval_config 配置
+  - 只做指代消解和主语补全，严格保持专有名词不变（禁止翻译，如 21V 不改写为 21伏特）
+  - 如不确定如何消解，原样返回原问题
 
 无历史（第一轮对话）：
-  - 使用 KNOWLEDGE_QUERY_REWRITE_SYSTEM prompt（简单规范化）
+  - 使用 KNOWLEDGE_QUERY_REWRITE_SYSTEM prompt（简单规范化，同样保护专有名词）
 ```
 
 **检索策略**
@@ -403,6 +410,8 @@ DELETE /files（file_id）
 | `multi_doc_group_size` | 多文档：每文档取 chunk 数 | 3 |
 | `strict_group_size` | 多文档：是否严格凑满 group_size | false |
 | `single_doc_top_k` | 单文档：返回 chunk 数 | 20 |
+| `llm_context_top_k` | 最终送入 LLM 的切片数上限 | 10 |
+| `memory_turns` | 对话记忆轮数（每轮=1问+1答），用于改写和生成 | 2 |
 
 配置在创建知识库时设定，也可通过 `PUT /admin/collections/{kb_name}` 随时更新。
 
@@ -523,7 +532,32 @@ DELETE /files（file_id）
 有。`session_id="default"` 时 checkpointer 以 `thread_id="default"` 存状态，历史持久化在 PostgreSQL，重启不丢。但消息不写入 `conversation_message` 表，左侧列表不可见。新建对话后才会写入业务表并在左侧显示。
 
 **Q: 多轮对话中代词指代（"它"、"这个"）能正确检索吗？**
-能。`query_rewrite` 节点有历史时会使用指代消解版 prompt，取最近 3 轮历史，将代词替换为明确实体后再做向量检索。
+能。`query_rewrite` 节点有历史时会使用指代消解版 prompt，取最近 `memory_turns` 轮历史（默认 2 轮，可在 `retrieval_config` 配置），将代词替换为明确实体后再做向量检索。改写使用轻量的 `llm_clean_model`（qwen-turbo），严格保护专有名词不做翻译。图文模式下 LLM 输出的图片占位符会经过后处理校验，非法占位符自动清除。
 
 **Q: Attu 端口冲突？**
 `docker-compose.yml` 中 attu 映射的是宿主机 `8080:3000`，后端用 `8000`，不冲突。
+
+**图片占位符完整处理链路**
+切片阶段（doc_image_parser.py）
+
+PDF/DOCX 解析时，文字和图片按页面位置排序交织处理。遇到图片时：
+
+上传图片到 OSS（路径 rag_image/{kb}/{file}/{chunk_id}/xxx.png）
+生成 <<IMAGE:xxxxxxxx>>（8位 hex）占位符，直接插入 buffer 文本流
+写 knowledge_chunk_image 表（chunk_id, placeholder, oss_key）
+最终 chunk 的 content 形如：
+
+这是一段说明文字<<IMAGE:9593bf16>>下面继续文字内容
+向量化阶段（milvus_service.upsert_chunks）
+
+content 字段（含占位符）直接送入 DashScope embedding，同时作为 BM25 的 content 字段写入 Milvus。占位符字符串 <<IMAGE:9593bf16>> 会被完整向量化和 BM25 索引。
+
+生成阶段（generate.py）
+
+检索到 chunk 后，批量查 knowledge_chunk_image 表，生成 image_map（placeholder → 预签名 URL）。LLM 的 system prompt 里包含含占位符的 context，LLM 被要求在回答中引用占位符。_sanitize_image_placeholders 过滤掉 LLM 捏造的非法占位符。
+
+前端渲染（SimpleChat.vue）
+
+实时回答：image_map 随 API 响应返回，前端把 <<IMAGE:xxx>> 替换成 ![image](presigned_url) 再用 markdown-it 渲染。
+
+历史消息：conversation_message.image_placeholders 存占位符列表，加载历史时批量调 POST /chunks/resolve-images 获取预签名 URL，再替换渲染。

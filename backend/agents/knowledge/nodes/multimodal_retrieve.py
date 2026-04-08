@@ -68,7 +68,7 @@ def multimodal_retrieve(
 
         milvus_svc = get_milvus_service()
 
-        # 多模态 kb 的 dense 字段用 qwen3-vl-embedding 生成，检索时文字向量也必须用同一模型
+        # 多模态 kb 的 dense 字段用 qwen3-vl-embedding 生成
         from app.services.multimodal_embedding_service import get_multimodal_embedding_service
         mm_svc = get_multimodal_embedding_service()
         query_text_vector = mm_svc.embed_text(query, dimension=image_vector_dim)

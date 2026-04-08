@@ -112,16 +112,20 @@ npm run dev
 - 图文模式：自动提取 PDF/DOCX 中的图片，与文本切片关联
 
 ### RAG 问答
-- 多轮对话，自动指代消解（"它"、"这个" → 明确实体）
+- 多轮对话，自动指代消解（"它"、"这个" → 明确实体），严格保护专有名词不做翻译
+- 改写使用轻量模型（qwen-turbo），不占用主模型资源
 - 混合检索：dense（语义）+ BM25（关键词）+ RRF 融合
+- 向量化前自动剥离图片占位符（`<<IMAGE:xxx>>`），避免污染向量和 BM25 索引；检索后从 PG 回填含占位符的原始内容供 LLM 使用
 - 多文档分组搜索：每个文档取 top-N chunk，保证结果多样性
 - 关键词精确预过滤模式
-- 每个知识库独立检索参数（ranker / top_k / group_size 等）
+- 每个知识库独立检索参数（ranker / top_k / group_size / memory_turns 等）
+- 图文模式：LLM 输出的图片占位符经后处理校验，自动清除非法占位符
 
 ### 对话记忆
 - 基于 LangGraph `AsyncPostgresSaver`，以 `session_id` 为键持久化 agent 状态
 - 重启后端历史不丢失
 - 无会话模式（`session_id="default"`）也有持久化记忆
+- 对话记忆轮数（`memory_turns`）可在知识库检索配置中设定，默认 2 轮
 
 ---
 
@@ -157,6 +161,30 @@ OSS 预签名 URL 有效期 1 小时，刷新页面重新 resolve 即可。
 
 更多问题参见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
 
+**图片占位符完整处理链路**
+切片阶段（doc_image_parser.py）
+
+PDF/DOCX 解析时，文字和图片按页面位置排序交织处理。遇到图片时：
+
+上传图片到 OSS（路径 rag_image/{kb}/{file}/{chunk_id}/xxx.png）
+生成 <<IMAGE:xxxxxxxx>>（8位 hex）占位符，直接插入 buffer 文本流
+写 knowledge_chunk_image 表（chunk_id, placeholder, oss_key）
+最终 chunk 的 content 形如：
+
+这是一段说明文字<<IMAGE:9593bf16>>下面继续文字内容
+向量化阶段（milvus_service.upsert_chunks）
+
+content 字段（含占位符）直接送入 DashScope embedding，同时作为 BM25 的 content 字段写入 Milvus。占位符字符串 <<IMAGE:9593bf16>> 会被完整向量化和 BM25 索引。
+
+生成阶段（generate.py）
+
+检索到 chunk 后，批量查 knowledge_chunk_image 表，生成 image_map（placeholder → 预签名 URL）。LLM 的 system prompt 里包含含占位符的 context，LLM 被要求在回答中引用占位符。_sanitize_image_placeholders 过滤掉 LLM 捏造的非法占位符。
+
+前端渲染（SimpleChat.vue）
+
+实时回答：image_map 随 API 响应返回，前端把 <<IMAGE:xxx>> 替换成 ![image](presigned_url) 再用 markdown-it 渲染。
+
+历史消息：conversation_message.image_placeholders 存占位符列表，加载历史时批量调 POST /chunks/resolve-images 获取预签名 URL，再替换渲染。
 ---
 
 ## License

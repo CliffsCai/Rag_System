@@ -93,6 +93,17 @@ class ChunkRepository(BaseRepository):
         )
         return self._normalize(rows[0]) if rows else None
 
+    def get_by_ids(self, chunk_ids: List[str]) -> List[Dict[str, Any]]:
+        """批量查询切片（用于检索后回填 PG 原始内容）"""
+        if not chunk_ids:
+            return []
+        placeholders = ",".join(["%s"] * len(chunk_ids))
+        rows = self._execute_select(
+            f"SELECT * FROM knowledge_chunk WHERE id IN ({placeholders})",
+            tuple(chunk_ids),
+        )
+        return [self._normalize(r) for r in rows]
+
     def list_all_job_ids(self) -> List[str]:
         rows = self._execute_select("SELECT DISTINCT job_id FROM knowledge_chunk")
         return [str(r["job_id"]) for r in rows if r.get("job_id")]

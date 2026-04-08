@@ -270,12 +270,17 @@ def _upsert_multimodal_chunks(kb: dict, job_id: str, milvus_chunks: list) -> dic
     多模态知识库向量化：
     - 文本向量：qwen3-vl-embedding embed_text（与图片在同一语义空间）
     - 图片向量：qwen3-vl-embedding embed_image（nullable，无图片切片设为 None）
+    
+    优化：向量化前剥离图片占位符（<<IMAGE:xxx>>），避免污染向量和 BM25。
     """
+    import re
     from app.services.multimodal_embedding_service import get_multimodal_embedding_service
     from app.services.milvus_service import get_milvus_service
     from app.services.oss_service import get_oss_service
     from app.db import get_chunk_image_repository
 
+    _IMAGE_PH_RE = re.compile(r'<<IMAGE:[0-9a-f]+>>')
+    
     mm_svc = get_multimodal_embedding_service()
     milvus_svc = get_milvus_service()
     oss_svc = get_oss_service()
@@ -300,9 +305,12 @@ def _upsert_multimodal_chunks(kb: dict, job_id: str, milvus_chunks: list) -> dic
         if not content:
             continue
 
+        # 剥离图片占位符（向量化和 BM25 不感知占位符）
+        clean_content = _IMAGE_PH_RE.sub('', content).strip()
+
         # 文本向量（qwen3-vl-embedding，与图片同语义空间）
         try:
-            text_vec = mm_svc.embed_text(content, dimension=image_dim)
+            text_vec = mm_svc.embed_text(clean_content, dimension=image_dim)
         except Exception as e:
             logger.error(f"[MultimodalUpsert] 文本向量化失败 chunk_id={chunk['chunk_id']}: {e}")
             continue
@@ -324,9 +332,9 @@ def _upsert_multimodal_chunks(kb: dict, job_id: str, milvus_chunks: list) -> dic
             "job_id":      job_id,
             "file_name":   chunk.get("file_name", ""),
             "chunk_index": int(chunk.get("chunk_index", 0)),
-            "content":     content,
+            "content":     clean_content,  # Milvus 存 clean 版本（不含占位符），BM25 基于此
             "dense":       text_vec,
-            "image_dense": image_vec,  # None → Milvus nullable 字段
+            "image_dense": image_vec,
         }
         for k, v in (chunk.get("metadata") or {}).items():
             if k not in row:
