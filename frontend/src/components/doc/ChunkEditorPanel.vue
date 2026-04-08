@@ -53,15 +53,30 @@
                 @mouseenter="row._hoveredPh = ph; highlightSpan(row, ph, true)"
                 @mouseleave="row._hoveredPh = null; highlightSpan(row, ph, false)"
               >
-                <el-image
-                  v-if="row._imageUrlMap && row._imageUrlMap[ph]"
-                  :src="row._imageUrlMap[ph]"
-                  style="width:80px;height:60px;object-fit:cover;border-radius:4px;display:block"
-                  fit="cover"
-                  :preview-src-list="[row._imageUrlMap[ph]]"
-                  preview-teleported
-                />
-                <div v-else style="width:80px;height:60px;background:#f5f7fa;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#909399">无图片</div>
+                <div style="position:relative;width:80px;height:60px">
+                  <el-image
+                    v-if="row._imageUrlMap && row._imageUrlMap[ph]"
+                    :src="row._imageUrlMap[ph]"
+                    style="width:80px;height:60px;object-fit:cover;border-radius:4px;display:block"
+                    fit="cover"
+                    :preview-src-list="[row._imageUrlMap[ph]]"
+                    preview-teleported
+                  />
+                  <div v-else style="width:80px;height:60px;background:#f5f7fa;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#909399">无图片</div>
+                  <!-- 删除按钮 -->
+                  <button
+                    v-if="!props.readonly"
+                    class="img-delete-btn"
+                    :disabled="row._deletingPh === ph"
+                    title="删除图片"
+                    @click.stop="deleteImage(row, ph)"
+                  >
+                    <svg viewBox="0 0 10 10" fill="none" width="8" height="8">
+                      <line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                      <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                </div>
                 <div style="font-size:10px;color:#909399;margin-top:2px;word-break:break-all;max-width:80px">{{ ph }}</div>
               </div>
               <el-button
@@ -387,6 +402,35 @@ const validateAllPlaceholders = () => {
   return true
 }
 
+/** 计算 Range 在 editor 内容字符串中的字符偏移量 */
+const getCaretOffset = (el, range) => {
+  if (!el || !range) return 0
+  let offset = 0
+  for (const node of el.childNodes) {
+    if (range.startContainer === node) {
+      offset += range.startOffset
+      break
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      offset += node.textContent.length
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      if (node.dataset.placeholder) {
+        offset += node.dataset.placeholder.length
+      } else if (node.tagName === 'BR') {
+        offset += 1
+      } else {
+        offset += node.textContent.length
+      }
+    }
+    // range.startContainer 在该节点内部（文字节点被 span 包裹的情况不存在，但防御一下）
+    if (node.contains && node.contains(range.startContainer) && node !== range.startContainer) {
+      offset += range.startOffset
+      break
+    }
+  }
+  return offset
+}
+
 // ── 图片管理 ──────────────────────────────────────────────────────────────────
 
 const addImageDialogVisible = ref(false)
@@ -403,18 +447,55 @@ const openAddImage = (row) => {
 
 const onImageFileChange = (file) => { addImageFile.value = file.raw }
 
+/** 直接删除图片：删 OSS + knowledge_chunk_image + content 占位符，无需点保存 */
+const deleteImage = async (row, ph) => {
+  try {
+    await ElMessageBox.confirm('确认删除该图片？此操作不可撤回。', '删除图片', {
+      confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning',
+    })
+  } catch { return }
+
+  row._deletingPh = ph
+  try {
+    const imgRes = await docApi.getChunkImages(props.jobId, row.chunk_index)
+    const images = imgRes.data.data?.images || []
+    const img = images.find(i => i.placeholder === ph)
+    if (!img) { ElMessage.error('未找到图片记录'); return }
+
+    await docApi.deleteChunkImage(props.jobId, row.chunk_index, img.id)
+
+    // 后端已从 content 移除占位符，本地同步
+    row.content = row.content.split(ph).join('')
+    const map = { ...row._imageUrlMap }
+    delete map[ph]
+    row._imageUrlMap = map
+
+    await nextTick()
+    renderEditor(editorRefs[row.chunk_id], row.content, row._imageUrlMap, null)
+    ElMessage.success('图片已删除')
+  } catch (e) {
+    ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    row._deletingPh = null
+  }
+}
+
 const confirmAddImage = async () => {
   if (!addImageFile.value) { ElMessage.warning('请先选择图片'); return }
   addingImage.value = true
   try {
     const row = addImageRow.value
+    const el = editorRefs[row.chunk_id]
+
+    // 计算光标在 content 字符串中的偏移量，传给后端决定占位符插入位置
+    const insertOffset = getCaretOffset(el, row._insertPos)
+
     const res = await docApi.addChunkImage(
-      props.jobId, row.chunk_index, addImageFile.value, null, 0
+      props.jobId, row.chunk_index, addImageFile.value, null, insertOffset
     )
     const { placeholder, oss_url } = res.data.data
 
     // 在光标位置插入占位符 span
-    const el = editorRefs[row.chunk_id]
     if (el && row._insertPos) {
       const range = row._insertPos
       range.deleteContents()
@@ -465,20 +546,6 @@ const saveOne = async (row) => {
   if (!validatePlaceholders(row)) return
   row._saving = true
   try {
-    // 找出被删除的占位符，调后端删除图片记录
-    const currentPhs = new Set(parsePlaceholders(row.content))
-    const deletedPhs = Object.keys(row._imageUrlMap).filter(ph => !currentPhs.has(ph))
-    if (deletedPhs.length) {
-      const imgRes = await docApi.getChunkImages(props.jobId, row.chunk_index)
-      const images = imgRes.data.data?.images || []
-      for (const ph of deletedPhs) {
-        const img = images.find(i => i.placeholder === ph)
-        if (img) await docApi.deleteChunkImage(props.jobId, row.chunk_index, img.id)
-        const map = { ...row._imageUrlMap }
-        delete map[ph]
-        row._imageUrlMap = map
-      }
-    }
     await docApi.editChunk(props.jobId, row.chunk_index, row.content)
     row._edited = false
     ElMessage.success('保存成功')
@@ -634,5 +701,36 @@ onMounted(async () => {
 .image-preview-item:hover,
 .image-highlight {
   border-color: #f5a623;
+}
+
+/* 图片删除按钮 */
+.img-delete-btn {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: rgba(240, 107, 107, 0.85);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  z-index: 1;
+}
+.image-preview-item:hover .img-delete-btn {
+  opacity: 1;
+}
+.img-delete-btn:hover {
+  background: #f06b6b;
+}
+.img-delete-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 </style>
