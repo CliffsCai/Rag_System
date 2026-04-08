@@ -65,6 +65,7 @@ async def invoke_knowledge_qa(
             strict_group_size=rc.get("strict_group_size", False),
             single_doc_top_k=rc.get("single_doc_top_k", 20),
             llm_context_top_k=rc.get("llm_context_top_k", 10),
+            memory_turns=rc.get("memory_turns", 2),
             # 多模态
             kb_type=kb.get("kb_type", "standard") if kb else "standard",
             query_image_url=query_image_url,

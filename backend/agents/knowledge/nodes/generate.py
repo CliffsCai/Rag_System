@@ -5,6 +5,7 @@ Generates answer based on retrieved context using DashScope Generation.call()
 with tool calling support
 """
 
+import re
 from typing import Dict, Any
 from datetime import datetime
 
@@ -14,6 +15,19 @@ from langchain_core.messages import AIMessage
 from ..state import KnowledgeAgentState
 from app.core.config import settings
 from app.core.prompts import KNOWLEDGE_GENERATE_SYSTEM_GREETING, KNOWLEDGE_GENERATE_SYSTEM, KNOWLEDGE_GENERATE_SYSTEM_IMAGE, KNOWLEDGE_GENERATE_SYSTEM_MULTIMODAL
+
+
+def _sanitize_image_placeholders(answer: str, image_map: dict) -> str:
+    """移除 LLM 捏造的非法占位符，只保留 image_map 中存在的合法占位符"""
+    if not image_map:
+        return answer
+    valid_keys = set(image_map.keys())  # e.g. {"<<IMAGE:9593bf16>>", ...}
+
+    def _replace(m):
+        placeholder = m.group(0)
+        return placeholder if placeholder in valid_keys else ""
+
+    return re.sub(r'<<IMAGE:[0-9a-fA-F]{8}>>', _replace, answer)
 
 
 def _convert_messages_to_dicts(messages) -> list:
@@ -182,7 +196,9 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
         messages = [{"role": "system", "content": system_prompt}]
 
         # Conversation history (exclude last message = current query)
-        history_dicts = _convert_messages_to_dicts(conversation_messages[:-1])
+        # 只取最近 memory_turns 轮历史，与 query_rewrite 保持一致
+        memory_turns = rag_config.memory_turns
+        history_dicts = _convert_messages_to_dicts(conversation_messages[-(2 * memory_turns + 1):-1])
         messages.extend(history_dicts)
 
         # Current user query：多模态时把图片 URL 插入 content
@@ -237,6 +253,10 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
             ) or ""
 
         tools_used = []
+
+        # ── 图片占位符后处理：移除 LLM 捏造的非法占位符 ─────────────────────
+        if is_image_mode or is_multimodal_kb:
+            answer = _sanitize_image_placeholders(answer, image_map)
 
         # ── Sources：返回全部切片，前端负责文件名去重展示 ────────────────────
         sources = []

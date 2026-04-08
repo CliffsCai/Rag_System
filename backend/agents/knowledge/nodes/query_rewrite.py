@@ -14,8 +14,7 @@ from app.core.prompts import KNOWLEDGE_QUERY_REWRITE_SYSTEM, KNOWLEDGE_QUERY_REW
 
 logger = logging.getLogger(__name__)
 
-# 带入历史的最大轮数（太长会干扰改写，取最近 3 轮即可）
-_MAX_HISTORY_TURNS = 3
+# 带入历史的最大轮数从 RAGConfig.memory_turns 读取，此处无需常量
 
 
 def query_rewrite(state: KnowledgeAgentState) -> dict:
@@ -24,12 +23,13 @@ def query_rewrite(state: KnowledgeAgentState) -> dict:
     try:
         original_query = state["original_query"]
         conversation_messages = state.get("messages", [])
+        memory_turns = state["config"].memory_turns  # 从 config 读取，默认 2
 
         # messages[-1] 是当前 query（HumanMessage），历史是 [:-1]
         history = conversation_messages[:-1] if len(conversation_messages) > 1 else []
 
         # 取最近 N 轮（每轮 = 1 human + 1 ai），截取尾部
-        recent_history = history[-(2 * _MAX_HISTORY_TURNS):]
+        recent_history = history[-(2 * memory_turns):]
 
         if recent_history:
             # 有历史：用指代消解版 prompt，把历史拼入 messages
@@ -56,7 +56,7 @@ def query_rewrite(state: KnowledgeAgentState) -> dict:
 
         response = Generation.call(
             api_key=settings.dashscope_api_key,
-            model=state["config"].model,
+            model=settings.llm_clean_model,  # 改写用轻量模型，降低延迟和成本
             messages=messages,
             result_format="message",
         )

@@ -198,7 +198,7 @@ def init_db() -> None:
     try:
         from app.core.config import settings as _s
         import psycopg
-        conn_str = f"postgresql://{_s.pg_user}:{_s.pg_password}@{_s.pg_host}:{_s.pg_port}/{_s.pg_db}"
+        conn_str = f"postgresql://{_s.pg_user}:{_s.pg_password}@{_s.pg_host}:{_s.pg_port}/{_s.pg_db}?sslmode=disable"
         with psycopg.connect(conn_str, autocommit=True) as conn:
             from langgraph.checkpoint.postgres import PostgresSaver
             from psycopg.rows import dict_row

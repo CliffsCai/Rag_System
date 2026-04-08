@@ -151,6 +151,9 @@ class RAGConfig:
     query_image_url: Optional[str] = None    # 用户上传的查询图片 OSS 预签名 URL
     image_vector_dim: int = 1024             # 图片向量维度（与 kb 配置一致）
     
+    # Memory settings
+    memory_turns: int = 2  # 对话记忆轮数，每轮=1问+1答，默认保留最近2轮（4条消息）
+
     # Generation settings
     enable_citations: bool = True
     enable_images: bool = True

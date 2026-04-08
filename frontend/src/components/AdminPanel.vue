@@ -119,6 +119,10 @@
               <el-input-number v-model="retrievalForm.llm_context_top_k" :min="1" :max="20" style="width:120px" />
               <div class="tip">检索后最终送入 LLM 的切片上限，影响回答质量与 token 消耗</div>
             </el-form-item>
+            <el-form-item label="对话记忆轮数">
+              <el-input-number v-model="retrievalForm.memory_turns" :min="1" :max="10" style="width:120px" />
+              <div class="tip">保留最近 N 轮对话历史（每轮=1问+1答），用于查询改写和生成，默认 2</div>
+            </el-form-item>
           </el-form>
           <template #footer>
             <el-button @click="retrievalDialogVisible = false">取消</el-button>
@@ -263,6 +267,10 @@
             <el-form-item label="送给 LLM 的切片数">
               <el-input-number v-model="colForm.retrieval_config.llm_context_top_k" :min="1" :max="20" style="width:120px" />
               <div class="tip">检索后最终送入 LLM 的切片上限，影响回答质量与 token 消耗</div>
+            </el-form-item>
+            <el-form-item label="对话记忆轮数">
+              <el-input-number v-model="colForm.retrieval_config.memory_turns" :min="1" :max="10" style="width:120px" />
+              <div class="tip">保留最近 N 轮对话历史（每轮=1问+1答），用于查询改写和生成，默认 2</div>
             </el-form-item>
 
             <el-form-item>
@@ -419,6 +427,7 @@ const defaultColForm = () => ({
     single_doc_top_k: 20,
     llm_context_top_k: 10,
     image_vector_dim: 1024,
+    memory_turns: 2,
   },
 })
 const colForm = ref(defaultColForm())
@@ -488,7 +497,7 @@ const retrievalSaving = ref(false)
 const defaultRetrievalForm = () => ({
   ranker: 'RRF', hybrid_alpha: 0.5,
   multi_doc_top_k: 20, multi_doc_group_size: 3, strict_group_size: false,
-  single_doc_top_k: 20, llm_context_top_k: 10,
+  single_doc_top_k: 20, llm_context_top_k: 10, memory_turns: 2,
 })
 const retrievalForm = ref(defaultRetrievalForm())
 
@@ -503,6 +512,7 @@ const openRetrievalDialog = (row) => {
     strict_group_size:     rc.strict_group_size     ?? false,
     single_doc_top_k:      rc.single_doc_top_k      ?? 20,
     llm_context_top_k:     rc.llm_context_top_k     ?? 10,
+    memory_turns:          rc.memory_turns          ?? 2,
   }
   retrievalDialogVisible.value = true
 }

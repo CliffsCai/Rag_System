@@ -507,7 +507,7 @@ const modes = [
 ]
 const suggestions = {
   general:   ['你能做什么？', '帮我搜索最新资讯', '发送一封邮件'],
-  knowledge: ['如何接受21V的Guest邀请？', '我换了新手机如何重新配置MFA认证？', '钉钉打车'],
+  knowledge: ['你能做什么？', '鸡蛋可以用来做什么？', '鱼可以用来做什么菜？'],
 }
 
 const canSend = computed(() =>

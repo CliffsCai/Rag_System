@@ -29,6 +29,7 @@ def get_pool() -> psycopg2.pool.ThreadedConnectionPool:
             user=settings.pg_user,
             password=settings.pg_password,
             connect_timeout=10,
+            sslmode="disable",
         )
         logger.info(f"PostgreSQL 连接池已创建: {settings.pg_host}:{settings.pg_port}/{settings.pg_db}")
     return _pool
