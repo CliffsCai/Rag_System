@@ -1,34 +1,5 @@
 # 如何添加新节点并接入 Knowledge Agent 流程
 
-## 当前 Graph 流程
-
-```
-START
-  ↓
-query_rewrite          # 改写用户提问
-  ↓
-query_classify         # 判断 single_doc / multi_doc
-  ↓
-determine_retrieval_strategy  # 判断检索策略 (keyword / hybrid)
-  ↓
-  ┌──────────────────────────────────────────────┐
-  │ [single_doc 路径]                             │
-  │ single_doc_retrieve → generate_answer        │
-  └──────────────────────────────────────────────┘
-  ┌──────────────────────────────────────────────┐
-  │ [multi_doc 路径]                              │
-  │ multi_doc_retrieve → filter_chunks           │
-  │   → rerank_chunks → generate_answer          │
-  └──────────────────────────────────────────────┘
-  ↓
-check_quality (条件跳过)
-  ↓
-finalize_metrics
-  ↓
-END
-```
-
----
 
 ## 第一步：新建节点文件
 
