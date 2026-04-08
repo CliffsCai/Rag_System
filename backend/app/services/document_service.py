@@ -288,7 +288,7 @@ def search_documents(
     keyword_filter: Optional[str] = None,
 ) -> list:
     from app.services.milvus_service import get_milvus_service
-    return get_milvus_service().hybrid_search(
+    hits = get_milvus_service().hybrid_search(
         collection_name=kb_name,
         query=query,
         top_k=top_k,
@@ -297,6 +297,36 @@ def search_documents(
         hybrid_alpha=hybrid_alpha,
         keyword_filter=keyword_filter or None,
     )
+
+    # 批量查图片记录，给每个 hit 附上 image_map（placeholder → presigned URL）
+    if hits:
+        try:
+            from app.db import get_chunk_image_repository
+            from app.services.oss_service import get_oss_service
+            chunk_ids = [h["chunk_id"] for h in hits if h.get("chunk_id")]
+            img_records = get_chunk_image_repository().get_by_chunk_ids(chunk_ids)
+            oss_svc = get_oss_service()
+            chunk_img_map: dict = {}
+            for r in img_records:
+                cid = r["chunk_id"]
+                ph = r.get("placeholder", "")
+                ok = r.get("oss_key", "")
+                if ph and ok:
+                    try:
+                        url = oss_svc.get_presigned_url(ok, expires=3600)
+                    except Exception:
+                        from urllib.parse import quote
+                        url = f"/api/v1/documents/image-proxy?oss_key={quote(ok, safe='/')}"
+                    chunk_img_map.setdefault(cid, {})[ph] = url
+            for h in hits:
+                h["image_map"] = chunk_img_map.get(h["chunk_id"], {})
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"search_documents 查询图片失败（不影响结果）: {e}")
+            for h in hits:
+                h.setdefault("image_map", {})
+
+    return hits
 
 
 # ── 工具 ──────────────────────────────────────────────────────────────────────

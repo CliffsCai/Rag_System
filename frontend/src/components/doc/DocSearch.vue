@@ -86,7 +86,10 @@
           <template #default="{ row }">
             <div style="padding:16px 24px">
               <div style="font-weight:600;margin-bottom:6px">完整内容</div>
-              <pre style="white-space:pre-wrap;background:#f5f7fa;padding:12px;border-radius:4px;font-size:13px;line-height:1.6">{{ row.content }}</pre>
+              <div
+                v-html="renderContent(row.content, row.image_map)"
+                style="background:#0d1117;border:1px solid rgba(255,255,255,0.08);padding:12px;border-radius:8px;font-size:13px;line-height:1.6;color:#cbd5e1;white-space:pre-wrap;word-break:break-all"
+              />
               <div v-if="row.metadata" style="margin-top:8px;font-size:12px;color:#606266">
                 <span style="font-weight:600">元数据：</span>{{ JSON.stringify(row.metadata) }}
               </div>
@@ -104,7 +107,7 @@
         <el-table-column prop="file_name" label="文件名" width="180" show-overflow-tooltip />
         <el-table-column label="内容预览" min-width="280" show-overflow-tooltip>
           <template #default="{ row }">
-            <span style="font-size:13px">{{ row.content?.substring(0, 120) }}{{ row.content?.length > 120 ? '…' : '' }}</span>
+            <span style="font-size:13px">{{ stripPlaceholders(row.content)?.substring(0, 120) }}{{ stripPlaceholders(row.content)?.length > 120 ? '…' : '' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="来源" width="90" align="center">
@@ -192,17 +195,34 @@ const reset = () => {
 
 const sourceLabel = (s) => ({ 1: '向量', 2: '全文', 3: '双路' }[s] || '-')
 const sourceType = (s) => ({ 1: 'primary', 2: 'warning', 3: 'success' }[s] || 'info')
+
+const _PH_RE = /<<IMAGE:[0-9a-f]+>>/g
+
+/** 预览列：去掉占位符，避免显示 <<IMAGE:xxx>> */
+const stripPlaceholders = (content) => (content || '').replace(_PH_RE, '')
+
+/** 展开行：把占位符替换成 <img>，其余文字做 HTML 转义 */
+const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+const renderContent = (content, imageMap) => {
+  if (!content) return ''
+  const map = imageMap || {}
+  // 按占位符分割，逐段处理
+  const parts = content.split(_PH_RE)
+  const placeholders = [...content.matchAll(_PH_RE)].map(m => m[0])
+  let html = ''
+  parts.forEach((part, i) => {
+    html += escapeHtml(part)
+    if (i < placeholders.length) {
+      const ph = placeholders[i]
+      const url = map[ph]
+      html += url
+        ? `<img src="${url}" style="max-width:100%;border-radius:4px;margin:4px 0;display:block" />`
+        : `<span style="color:#909399;font-size:12px">[图片]</span>`
+    }
+  })
+  return html
+}
 </script>
 
 <style scoped>
-pre {
-  white-space: pre-wrap;
-  background: #0d1117;
-  border: 1px solid rgba(255,255,255,0.08);
-  padding: 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #cbd5e1;
-}
 </style>
