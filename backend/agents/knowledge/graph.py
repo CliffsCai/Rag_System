@@ -6,18 +6,18 @@ Defines the complete RAG workflow using LangGraph
 Workflow:
   START
     ↓
-  query_rewrite          - 改写用户提问
+  query_rewrite          - 改写用户提问，更新rewrite字段
     ↓
-  query_classify         - 判断 single_doc / multi_doc
+  query_classify         - 判断 single_doc / multi_doc，更新query_type字段
     ↓
-  determine_retrieval_strategy  - 判断 keyword / hybrid
-    ↓
+  determine_retrieval_strategy  - 判断 keyword / hybrid，更新retrieval_strategy
+    ↓根据retrieval_strategy、走不同的分支，在graph.py 中add_conditional_edges方法定义条件分支，再通过query_type字段，在检索时选不同的检索方式，具体检索逻辑先不讲
   ┌─────────────────────────────────────────┐
   │ single_doc_retrieve                     │  top_k=20, Milvus RRF hybrid   │
   │   → generate_answer                     │
   └─────────────────────────────────────────┘
   ┌─────────────────────────────────────────┐
-  │ multi_doc_retrieve                      │  top_k=50, Milvus RRF hybrid
+  │ multi_doc_retrieve                      │  top_k=20, Milvus RRF hybrid
   │   → filter_chunks (score 阈值过滤)      │  │
   │   → select_top_k_chunks (排序截断)      │
   │   → generate_answer                     │

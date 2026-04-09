@@ -20,7 +20,7 @@ def relevance_filter(state: KnowledgeAgentState) -> dict:
     start_time = datetime.now()
 
     try:
-        query = state["query"]
+        query = state["rewritten_query"]
         # single_doc 路径：merged_chunks 直接来自 single_doc_retrieve
         # multi_doc 路径：rerank_chunks 已把 top-K 写回 merged_chunks
         chunks = state.get("merged_chunks") or []

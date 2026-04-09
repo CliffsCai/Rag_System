@@ -20,7 +20,7 @@ def query_classify(state: KnowledgeAgentState) -> dict:
     start_time = datetime.now()
 
     try:
-        query = state["query"]
+        query = state["rewritten_query"]
         _cfg = state.get("config")
 
         # 用户显式指定多文档，跳过 LLM 判断

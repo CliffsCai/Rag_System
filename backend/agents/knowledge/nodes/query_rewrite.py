@@ -74,7 +74,6 @@ def query_rewrite(state: KnowledgeAgentState) -> dict:
         logger.info(f"[QueryRewrite] 完成 ({duration:.0f}ms): {original_query} → {rewritten_query}")
 
         return {
-            "query": rewritten_query,
             "rewritten_query": rewritten_query,
             "processing_log": [{
                 "stage": "query_rewrite",

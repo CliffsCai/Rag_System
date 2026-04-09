@@ -28,7 +28,7 @@ def multimodal_retrieve(
     start_time = datetime.now()
 
     try:
-        query = state["query"]
+        query = state["rewritten_query"]
         _cfg = state.get("config")
         collection = _cfg.collection if _cfg else None
         retrieval_strategy = state.get("retrieval_strategy", RetrievalStrategy.HYBRID)

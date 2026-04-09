@@ -43,7 +43,7 @@ async def invoke_knowledge_qa(
             logger.warning(f"读取 kb retrieval_config 失败，使用默认值: {e}")
 
     # LangGraph 通过 checkpointer（thread_id=session_id）自动恢复历史对话，
-    # 无需手动传入历史消息，否则 add_messages reducer 会导致消息重复累加。
+
     initial_state = create_initial_state(
         query=query,
         user_id="api_user",

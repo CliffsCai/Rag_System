@@ -16,7 +16,7 @@ def determine_retrieval_strategy(state: KnowledgeAgentState) -> dict:
     start_time = datetime.now()
 
     try:
-        query = state["query"]
+        query = state["rewritten_query"]
         _cfg = state.get("config")
 
         # 用户指定了关键词，直接强制 KEYWORD_ONLY，跳过规则判断

@@ -66,7 +66,7 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
         - Calculates confidence score
         - Extracts source citations
     """
-    query = state["query"]
+    query = state["rewritten_query"]
     reranked_chunks = state.get("merged_chunks") or []
     rag_config = state["config"]
     conversation_messages = state.get("messages", [])
