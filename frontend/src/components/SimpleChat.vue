@@ -152,7 +152,13 @@
                 <img v-if="msg.queryImagePreview" :src="msg.queryImagePreview" style="max-width:120px;border-radius:6px;margin-bottom:4px;display:block" />
                 {{ msg.content }}
               </div>
-              <div class="bubble-text" v-else v-html="msg.content" />
+              <div class="bubble-text" v-else-if="msg.isHtml">
+                <!-- 知识库流式：首字到达前在同一气泡内显示「思考中」波浪，避免单独第二条空对话框 -->
+                <div v-if="msg._streamThinking" class="typing-bubble stream-thinking-inline">
+                  <div class="wave-bar" /><div class="wave-bar" /><div class="wave-bar" />
+                </div>
+                <div v-else v-html="msg.content" />
+              </div>
 
               <!-- Tools -->
               <div v-if="msg.tools_used?.length" class="meta-row">
@@ -198,9 +204,9 @@
         </div>
       </transition-group>
 
-      <!-- Typing indicator -->
+      <!-- Typing indicator（知识库流式已在消息列表里插入 assistant 气泡，不再显示下方占位，避免双气泡） -->
       <transition name="fade">
-        <div v-if="loading" class="msg-row assistant">
+        <div v-if="loading && chatMode !== 'knowledge'" class="msg-row assistant">
           <div class="ai-avatar">
             <div class="ai-avatar-ring pulsing" />
             <div class="ai-avatar-bg" />
@@ -526,6 +532,37 @@ const scrollToBottom = () => nextTick(() => {
 })
 const useSuggestion = (text) => { inputMessage.value = text; sendMessage() }
 
+/** 与后端 _sanitize_image_placeholders 一致：仅保留 image_map 中存在的占位符 */
+const sanitizeImagePlaceholders = (text, imageMap) => {
+  if (!text) return ''
+  if (!imageMap || !Object.keys(imageMap).length) return text
+  const valid = new Set(Object.keys(imageMap))
+  return text.replace(/<<IMAGE:[0-9a-fA-F]{8}>>/g, (m) => (valid.has(m) ? m : ''))
+}
+
+const toMarkdownWithImages = (raw, imageMap) => {
+  const sanitized = sanitizeImagePlaceholders(raw, imageMap)
+  let s = sanitized
+  if (imageMap) {
+    Object.entries(imageMap).forEach(([ph, url]) => { s = s.split(ph).join(`\n![image](${url})\n`) })
+  }
+  return s
+}
+
+let streamRenderRaf = null
+/** 通过 RAF 合并渲染；必须从 messages[idx] 读写字段以保证 Vue 追踪到响应式对象 */
+const scheduleStreamRender = (assistantIdx, getRawState) => {
+  if (streamRenderRaf) return
+  streamRenderRaf = requestAnimationFrame(() => {
+    streamRenderRaf = null
+    const row = messages.value[assistantIdx]
+    if (!row || row.role !== 'assistant') return
+    const { streamRaw, imageMap } = getRawState()
+    row.content = md.render(toMarkdownWithImages(streamRaw, imageMap))
+    scrollToBottom()
+  })
+}
+
 const sendMessage = async () => {
   const text = inputMessage.value.trim()
   if (!canSend.value || !text) return
@@ -543,20 +580,58 @@ const sendMessage = async () => {
       if (queryImage.value) {
         queryImageBase64 = await compressImageToBase64(queryImage.value, 800, 0.7)
       }
-      const res = await apiService.knowledgeQA(
-        text, props.model, currentSessionId.value || 'default', selectedCollection.value || null,
-        forceMultiDoc.value || null,
-        (keywordFilterEnabled.value && keywordFilter.value) ? keywordFilter.value : null,
-        queryImageBase64,
+      messages.value.push({
+        role: 'assistant', isHtml: true, content: '',
+        _streamThinking: true,
+        confidence: null, sources: [], _showSources: false, timestamp: new Date(),
+      })
+      const assistantIdx = messages.value.length - 1
+      let streamRaw = ''
+      let imageMap = {}
+      const rawState = () => ({ streamRaw, imageMap })
+      await apiService.knowledgeQueryStream(
+        {
+          query: text,
+          session_id: currentSessionId.value || 'default',
+          model: props.model,
+          collection: selectedCollection.value || null,
+          force_multi_doc: forceMultiDoc.value || null,
+          keyword_filter: (keywordFilterEnabled.value && keywordFilter.value) ? keywordFilter.value : null,
+          query_image: queryImageBase64,
+        },
+        {
+          onMeta: (m) => {
+            imageMap = m.image_map || {}
+            const row = messages.value[assistantIdx]
+            if (row) row.sources = [...(m.sources || [])]
+          },
+          onDelta: (d) => {
+            streamRaw += d.text || ''
+            const row = messages.value[assistantIdx]
+            if (row && row._streamThinking && streamRaw.length > 0) {
+              row._streamThinking = false
+            }
+            scheduleStreamRender(assistantIdx, rawState)
+          },
+          onDone: (d) => {
+            if (streamRenderRaf) {
+              cancelAnimationFrame(streamRenderRaf)
+              streamRenderRaf = null
+            }
+            streamRaw = d.answer != null ? d.answer : streamRaw
+            imageMap = d.image_map || imageMap
+            const row = messages.value[assistantIdx]
+            if (row) {
+              row._streamThinking = false
+              row.confidence = d.confidence
+              row.sources = d.sources?.length ? [...d.sources] : row.sources
+              row.content = md.render(toMarkdownWithImages(streamRaw, imageMap))
+            }
+          },
+          onError: (err) => { throw err },
+        },
       )
       clearQueryImage()
-      const imageMap = res.image_map || {}
-      let raw = res.answer || '抱歉，未收到有效回复。'
-      Object.entries(imageMap).forEach(([ph, url]) => { raw = raw.split(ph).join(`\n![image](${url})\n`) })
-      messages.value.push({
-        role: 'assistant', isHtml: true, content: md.render(raw),
-        confidence: res.confidence, sources: res.sources || [], _showSources: false, timestamp: new Date(),
-      })
     } else {
       const apiMsgs = messages.value.map(m => ({ role: m.role, content: m.content }))
       const res = await apiService.chat(apiMsgs, props.model)
@@ -571,7 +646,18 @@ const sendMessage = async () => {
     }
   } catch (e) {
     console.error(e); ElMessage.error('发送失败')
-    messages.value.push({ role: 'assistant', content: '抱歉，发生错误，请稍后重试。', timestamp: new Date() })
+    if (chatMode.value === 'knowledge') {
+      const last = messages.value[messages.value.length - 1]
+      if (last?.role === 'assistant') {
+        last._streamThinking = false
+        last.isHtml = false
+        last.content = '抱歉，发生错误，请稍后重试。'
+      } else {
+        messages.value.push({ role: 'assistant', content: '抱歉，发生错误，请稍后重试。', timestamp: new Date() })
+      }
+    } else {
+      messages.value.push({ role: 'assistant', content: '抱歉，发生错误，请稍后重试。', timestamp: new Date() })
+    }
   } finally { loading.value = false; scrollToBottom() }
 }
 
@@ -1089,6 +1175,12 @@ defineExpose({ clearMessages })
 .typing-bubble {
   display: flex; align-items: flex-end; gap: 4px;
   padding: 14px 18px; min-width: 60px;
+}
+/* 嵌在正文气泡内的思考动画，略收紧边距 */
+.stream-thinking-inline {
+  padding: 10px 14px;
+  min-width: 52px;
+  margin: -2px 0;
 }
 .wave-bar {
   width: 3px; border-radius: 99px; background: #4f8ef7;

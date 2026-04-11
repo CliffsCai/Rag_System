@@ -36,7 +36,10 @@ class Settings:
     max_tokens: int = 2000
     timeout: int = 60
     max_retries: int = 2
-    dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    dashscope_base_url: str = os.getenv(
+        "DASHSCOPE_COMPATIBLE_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
 
     # ── Milvus ────────────────────────────────────────────────────────────────
     milvus_host: str = os.getenv("MILVUS_HOST", "localhost")

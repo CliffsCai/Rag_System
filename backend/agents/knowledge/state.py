@@ -4,7 +4,7 @@ Enterprise Knowledge Base QA Agent State Definition
 Complete state management for production RAG system
 """
 
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, NotRequired
 from typing import List, Dict, Any, Optional, Annotated
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -304,6 +304,9 @@ class KnowledgeAgentState(TypedDict):
 
     # 图文模式：占位符 → 代理 URL 映射，供前端渲染图片
     image_map: Optional[Dict[str, str]]
+
+    # SSE 流式：在 interrupt_before generate 之后由服务层写入，generate 节点内短路 LLM
+    precomputed_answer: NotRequired[Optional[str]]
     
     # Answer metadata
     answer_quality: Optional[AnswerQuality]

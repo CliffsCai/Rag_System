@@ -31,7 +31,7 @@ Workflow:
 """
 
 from langgraph.graph import StateGraph, START, END
-from typing import Literal
+from typing import Literal, Optional, List
 
 from .state import KnowledgeAgentState
 from .nodes import (
@@ -68,12 +68,13 @@ def should_check_quality(state: KnowledgeAgentState) -> Literal["check_quality",
     return "check_quality" if config.enable_fallback else "finalize_metrics"
 
 
-def create_knowledge_agent(checkpointer=None):
+def create_knowledge_agent(checkpointer=None, interrupt_before: Optional[List[str]] = None):
     """
     创建 Knowledge Agent
 
     Args:
         checkpointer: LangGraph checkpointer（AsyncPostgresSaver 或 MemorySaver）
+        interrupt_before: 若包含 'generate_answer'，则 ainvoke 在生成前暂停，供 OpenAI 兼容流式补全后 aupdate_state + 二次 ainvoke 恢复
     Returns:
         Compiled LangGraph agent
     """
@@ -128,7 +129,10 @@ def create_knowledge_agent(checkpointer=None):
     builder.add_edge("check_quality", "finalize_metrics")
     builder.add_edge("finalize_metrics", END)
 
-    graph = builder.compile(checkpointer=checkpointer)
+    compile_kw = {"checkpointer": checkpointer}
+    if interrupt_before:
+        compile_kw["interrupt_before"] = interrupt_before
+    graph = builder.compile(**compile_kw)
 
     print("[Graph] Knowledge Agent created")
     print("[Graph] single_doc: rewrite→classify→strategy→single_retrieve(Milvus hybrid)→generate")
