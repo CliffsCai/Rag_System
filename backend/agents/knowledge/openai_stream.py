@@ -5,6 +5,7 @@
 """
 from typing import Any, AsyncIterator, Dict, List
 
+import httpx
 from openai import AsyncOpenAI
 
 from app.core.config import settings
@@ -42,6 +43,7 @@ async def iter_openai_text_deltas(
     client = AsyncOpenAI(
         api_key=settings.dashscope_api_key,
         base_url=settings.dashscope_base_url,
+        http_client=httpx.AsyncClient(verify=settings.ssl_verify),
     )
     oa_messages = dashscope_style_messages_to_openai(messages)
     stream = await client.chat.completions.create(

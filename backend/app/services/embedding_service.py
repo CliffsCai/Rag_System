@@ -48,7 +48,7 @@ class EmbeddingService:
         vectors = self._embed_batch([text], dimension=dim)
         return vectors[0] if vectors else []
 
-    def _embed_batch(self, texts: List[str], retry: int = 3, dimension: Optional[int] = None) -> List[List[float]]:
+    def _embed_batch(self, texts: List[str], retry: int = 5, dimension: Optional[int] = None) -> List[List[float]]:
         for attempt in range(retry):
             try:
                 resp = TextEmbedding.call(
@@ -64,7 +64,7 @@ class EmbeddingService:
                 return [e["embedding"] for e in embeddings]
             except Exception as e:
                 if attempt < retry - 1:
-                    wait = 2 ** attempt
+                    wait = min(2 ** attempt * 2, 60)  # 2s, 4s, 8s, 16s，最多 60s
                     logger.warning(f"Embedding 调用失败，{wait}s 后重试 ({attempt+1}/{retry}): {e}")
                     time.sleep(wait)
                 else:

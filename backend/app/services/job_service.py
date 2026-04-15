@@ -45,6 +45,7 @@ async def run_job_pipeline(
     chunk_overlap: int,
     image_dpi: int,
     sync_graph: bool = False,
+    excel_rows_per_chunk: int = 50,
 ) -> None:
     """
     完整流水线：
@@ -80,6 +81,7 @@ async def run_job_pipeline(
                 file_name=file_name,
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
+                excel_rows_per_chunk=excel_rows_per_chunk,
             )
             image_records = []
 
@@ -169,9 +171,22 @@ async def upsert_job_to_milvus(job_id: str) -> dict:
         )
     else:
         result = await asyncio.to_thread(
-            milvus_svc.upsert_chunks, kb["name"], milvus_chunks,
-            kb["vector_dim"], kb.get("embedding_model"), kb.get("metadata_fields") or []
+            _upsert_chunks_in_batches,
+            milvus_svc, kb, milvus_chunks,
         )
+
+    failed_batches = result.get("failed_batches", [])
+    if failed_batches:
+        # 部分批次失败：job 保持 chunked，提示用户重试（已写入的批次 upsert 幂等，重试安全）
+        total_batches = result.get("total_batches", "?")
+        stage = (
+            f"部分向量化失败（{len(failed_batches)}/{total_batches} 批次），"
+            f"已写入 {result['upsert_count']} 条，请重新点击「上传向量库」重试"
+        )
+        get_job_repository().update_status(job_id, "chunked", stage=stage)
+        logger.warning(f"[upsert] job_id={job_id} 部分失败，失败批次: {failed_batches}")
+        return result
+
     job_repo.mark_vectorized(job_id)
 
     # 如果用户选择了"同步到知识图谱"，向量化完成后同步到 KT
@@ -179,7 +194,6 @@ async def upsert_job_to_milvus(job_id: str) -> dict:
         try:
             from app.services.kg_graph_sync_service import get_kg_graph_sync_service
             kg_sync = get_kg_graph_sync_service()
-            # 构建 chunk 向量映射（从 milvus_chunks 中提取）
             chunk_vectors = {
                 c["chunk_id"]: c.get("dense") or c.get("embedding", [])
                 for c in milvus_chunks
@@ -200,10 +214,113 @@ async def upsert_job_to_milvus(job_id: str) -> dict:
             )
             logger.info(f"[pipeline] 图谱同步完成 job_id={job_id}")
         except Exception as e:
-            # 图谱同步失败不影响主流程（向量库已成功）
             logger.error(f"[pipeline] 图谱同步失败 job_id={job_id}: {e}")
 
     return result
+
+
+# ── 内部：分批向量化写入（大文件容错）────────────────────────────────────────
+
+# 每次向量化+写入的切片数，控制单次 API 调用量和内存占用
+_UPSERT_BATCH = 100
+
+def _upsert_chunks_in_batches(milvus_svc, kb: dict, chunks: list) -> dict:
+    """
+    将 chunks 分批 embed + upsert，每批独立重试。
+    单批网络失败最多重试 5 次（指数退避），不影响其他批次已写入的数据。
+
+    原子性说明：
+    - Milvus 不支持事务，无法真正回滚。
+    - 失败时不抛异常，让 job 保持 chunked 状态（未 mark_vectorized）。
+    - upsert 按 chunk_id 幂等覆盖，用户重试时已写入的批次安全重跑，最终收敛到完整状态。
+    - 返回 failed_count > 0 时，调用方应更新 job stage 提示用户重试。
+    """
+    from app.services.embedding_service import get_embedding_service
+    import re
+    import time
+
+    _IMAGE_PH_RE = re.compile(r'<<IMAGE:[0-9a-f]+>>')
+
+    kb_name = kb["name"]
+    vector_dim = kb["vector_dim"]
+    embedding_model = kb.get("embedding_model")
+    metadata_fields = kb.get("metadata_fields") or []
+
+    fulltext_keys = [
+        mf["key"] for mf in metadata_fields
+        if mf.get("fulltext") and mf.get("key")
+    ]
+
+    embedding_svc = get_embedding_service()
+    original_model = embedding_svc.model
+    if embedding_model and embedding_model != original_model:
+        embedding_svc.model = embedding_model
+
+    total_upserted = 0
+    failed_batches = []
+    total_batches = (len(chunks) + _UPSERT_BATCH - 1) // _UPSERT_BATCH
+
+    try:
+        for batch_start in range(0, len(chunks), _UPSERT_BATCH):
+            batch = chunks[batch_start: batch_start + _UPSERT_BATCH]
+            batch_no = batch_start // _UPSERT_BATCH + 1
+
+            texts = []
+            for c in batch:
+                clean = _IMAGE_PH_RE.sub('', c["content"]).strip()
+                if fulltext_keys:
+                    meta = c.get("metadata") or {}
+                    prefix = "\n".join(
+                        f"{k}：{meta[k]}" for k in fulltext_keys if meta.get(k)
+                    )
+                    texts.append(f"{prefix}\n\n{clean}" if prefix else clean)
+                else:
+                    texts.append(clean)
+
+            success = False
+            for attempt in range(5):
+                try:
+                    vectors = embedding_svc.embed_texts(texts, dimension=vector_dim)
+                    if len(vectors) != len(batch):
+                        raise RuntimeError(f"向量数量不匹配: {len(vectors)} vs {len(batch)}")
+
+                    data = []
+                    for chunk, vec, indexed_content in zip(batch, vectors, texts):
+                        row = {
+                            "chunk_id":    chunk["chunk_id"],
+                            "job_id":      chunk.get("job_id", ""),
+                            "file_name":   chunk.get("file_name", ""),
+                            "chunk_index": int(chunk.get("chunk_index", 0)),
+                            "content":     indexed_content,
+                            "dense":       vec,
+                        }
+                        for k, v in (chunk.get("metadata") or {}).items():
+                            if k not in row:
+                                row[k] = v
+                        data.append(row)
+
+                    res = milvus_svc.client.upsert(collection_name=kb_name, data=data)
+                    total_upserted += res.get("upsert_count", len(data))
+                    logger.info(f"[upsert] 批次 {batch_no}/{total_batches} 完成，累计 {total_upserted} 条")
+                    success = True
+                    break
+                except Exception as e:
+                    wait = min(2 ** attempt * 2, 60)
+                    if attempt < 4:
+                        logger.warning(f"[upsert] 批次 {batch_no} 第 {attempt+1} 次失败，{wait}s 后重试: {e}")
+                        time.sleep(wait)
+                    else:
+                        logger.error(f"[upsert] 批次 {batch_no} 最终失败: {e}")
+                        failed_batches.append(batch_no)
+
+    finally:
+        embedding_svc.model = original_model
+
+    return {
+        "upsert_count": total_upserted,
+        "failed_batches": failed_batches,
+        "total_batches": total_batches,
+    }
 
 
 # ── 内部：文件下载 ────────────────────────────────────────────────────────────
@@ -256,14 +373,25 @@ def _parse_text_mode(
     file_name: str,
     chunk_size: int,
     chunk_overlap: int,
+    excel_rows_per_chunk: int = 50,
 ) -> list:
     """
     标准模式：提取文本 → chunk_splitter 切分
-    支持 PDF / DOCX / TXT / MD
+    支持 PDF / DOCX / TXT / MD / XLSX / XLS
     """
-    from app.services.chunk_splitter import split_text_with_metadata
+    from app.services.chunk_splitter import split_text_with_metadata, split_excel
 
     ext = file_name.lower().rsplit(".", 1)[-1]
+
+    # Excel 走专用切分逻辑
+    if ext in ("xlsx", "xls"):
+        return split_excel(
+            file_content=file_content,
+            file_name=file_name,
+            rows_per_chunk=excel_rows_per_chunk,
+            base_metadata={"file_name": file_name, "source": ext},
+        )
+
     text = _extract_text(file_content, ext, file_name)
     return split_text_with_metadata(
         text=text,

@@ -84,6 +84,7 @@ async def start_chunking(
     chunk_overlap: int = Query(50),
     image_dpi: int = Query(150),
     sync_graph: bool = Query(False, description="是否同步到知识图谱"),
+    excel_rows_per_chunk: int = Query(50, description="Excel 每个切片的数据行数"),
 ):
     """将类目下所有文件提交到知识库切分流水线"""
     result = await document_service.start_chunking(
@@ -94,6 +95,7 @@ async def start_chunking(
         chunk_overlap=chunk_overlap,
         image_dpi=image_dpi,
         sync_graph=sync_graph,
+        excel_rows_per_chunk=excel_rows_per_chunk,
     )
     return JSONResponse(content={
         "success": True,

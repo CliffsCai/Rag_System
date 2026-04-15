@@ -85,7 +85,7 @@
           </div>
           <template #tip>
             <div style="font-size:12px;color:#909399;margin-top:4px">
-              支持 PDF、Word、PPT、TXT、MD，最大 200MB
+              支持 PDF、Word、PPT、TXT、MD、Excel，最大 200MB
             </div>
           </template>
         </el-upload>
@@ -183,6 +183,10 @@
             </el-form-item>
             <el-form-item label="中文标题加强">
               <el-switch v-model="catConfig.zhTitleEnhance" />
+            </el-form-item>
+            <el-form-item label="Excel 每片行数">
+              <el-input-number v-model="catConfig.excelRowsPerChunk" :min="1" :max="5000" :step="10" style="width:160px" />
+              <span class="tip" style="margin-left:8px">Excel 文件每个切片的数据行数，默认 50</span>
             </el-form-item>
             <el-form-item label="VL增强识别">
               <el-switch v-model="catConfig.vlEnhance" />
@@ -312,6 +316,7 @@ const catConfig = ref({
   zhTitleEnhance: true,
   vlEnhance: false,
   imageDpi: 150,
+  excelRowsPerChunk: 50,
 })
 
 const uploadUrl = computed(() => {
@@ -354,7 +359,7 @@ const loadCollections = async () => {
 }
 
 const beforeUpload = (file) => {
-  const allowed = ['.pdf', '.doc', '.docx', '.txt', '.md', '.ppt', '.pptx']
+  const allowed = ['.pdf', '.doc', '.docx', '.txt', '.md', '.ppt', '.pptx', '.xlsx', '.xls']
   const ext = '.' + file.name.split('.').pop().toLowerCase()
   if (!allowed.includes(ext)) {
     ElMessage.error(`不支持的格式: ${ext}`)
@@ -398,6 +403,7 @@ const startChunking = async () => {
       vl_enhance: catConfig.value.vlEnhance,
       image_dpi: catConfig.value.imageDpi,
       sync_graph: syncGraphCat.value,
+      excel_rows_per_chunk: catConfig.value.excelRowsPerChunk,
     })
     chunkResult.value = res.data.data
     const { submitted, errors } = res.data.data

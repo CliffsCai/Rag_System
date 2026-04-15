@@ -21,7 +21,7 @@ from app.db import (
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_EXT = {".pdf", ".doc", ".docx", ".txt", ".md", ".ppt", ".pptx"}
+ALLOWED_EXT = {".pdf", ".doc", ".docx", ".txt", ".md", ".ppt", ".pptx", ".xlsx", ".xls"}
 # 允许：字母、数字、中文、下划线、连字符、点、空格
 _SAFE_FILENAME_RE = re.compile(r'^[\w\u4e00-\u9fff\-\. ]+$')
 
@@ -195,6 +195,7 @@ async def start_chunking(
     chunk_overlap: int = 50,
     image_dpi: int = 150,
     sync_graph: bool = False,
+    excel_rows_per_chunk: int = 50,
 ) -> dict:
     """将类目下所有文件提交到知识库切分流水线，每个文件后台异步处理"""
     category = get_category_repository().get(category_id)
@@ -244,6 +245,7 @@ async def start_chunking(
                 chunk_overlap=chunk_overlap,
                 image_dpi=image_dpi,
                 sync_graph=sync_graph,
+                excel_rows_per_chunk=excel_rows_per_chunk,
             )
             submitted.append({"file_name": file_name, "job_id": job_id})
         except Exception as e:
@@ -267,6 +269,7 @@ async def _run_pipeline(
     chunk_overlap: int,
     image_dpi: int,
     sync_graph: bool = False,
+    excel_rows_per_chunk: int = 50,
 ) -> None:
     from app.services.job_service import run_job_pipeline
     await run_job_pipeline(
@@ -281,6 +284,7 @@ async def _run_pipeline(
         chunk_overlap=chunk_overlap,
         image_dpi=image_dpi,
         sync_graph=sync_graph,
+        excel_rows_per_chunk=excel_rows_per_chunk,
     )
 
 

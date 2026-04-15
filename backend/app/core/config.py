@@ -66,7 +66,7 @@ class Settings:
     # ── Embedding ─────────────────────────────────────────────────────────────
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
     embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", "1536"))
-    embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "20"))
+    embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "10"))
 
     # ── 向量检索 ──────────────────────────────────────────────────────────────
     vector_top_k: int = int(os.getenv("VECTOR_TOP_K", "10"))

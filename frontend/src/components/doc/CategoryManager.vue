@@ -72,7 +72,7 @@
           type="file"
           style="display:none"
           multiple
-          accept=".pdf,.doc,.docx,.txt,.md,.ppt,.pptx"
+          accept=".pdf,.doc,.docx,.txt,.md,.ppt,.pptx,.xlsx,.xls"
           @change="onFilesSelected"
         />
         <!-- 文件夹选择器 -->

@@ -45,3 +45,5 @@ alibabacloud_oss_v2
 pageindex
 pymupdf
 python-docx
+pandas
+openpyxl

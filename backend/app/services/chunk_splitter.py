@@ -3,6 +3,7 @@
 纯文本切分器（标准模式）
 中文友好，支持句子边界 overlap，复用图文模式的 should_merge 逻辑
 """
+import io
 import re
 from typing import List, Tuple
 
@@ -149,3 +150,84 @@ def _add_overlap(chunks: List[str], overlap: int) -> List[str]:
         else:
             result.append(chunks[i])
     return result
+
+
+# ── Excel 切分 ────────────────────────────────────────────────────────────────
+
+def split_excel(
+    file_content: bytes,
+    file_name: str,
+    rows_per_chunk: int = 50,
+    base_metadata: dict = None,
+) -> List[dict]:
+    """
+    将 Excel 文件按 sheet 切分为 chunks。
+
+    规则：
+    - 每个 sheet 独立处理，不同 sheet 的数据不混入同一切片
+    - 每个切片包含：文件名 + sheet 名（标题增强）+ 表头行 + 数据行
+    - 若某 sheet 剩余行数不足 rows_per_chunk，单独成一个切片（不跨 sheet 补齐）
+    - 空 sheet（无数据行）跳过
+
+    切片 content 格式：
+        文件：{file_name}  Sheet：{sheet_name}
+        {col1}\t{col2}\t...
+        {val1}\t{val2}\t...
+        ...
+    """
+    import pandas as pd
+
+    meta = base_metadata or {}
+    chunks = []
+    chunk_index = 0
+
+    # read_excel 返回 {sheet_name: DataFrame}，header=0 默认第一行为列名
+    sheets: dict = pd.read_excel(
+        io.BytesIO(file_content),
+        sheet_name=None,   # 读取所有 sheet
+        header=0,
+        dtype=str,         # 统一转字符串，避免数值/日期格式问题
+        keep_default_na=False,
+    )
+
+    for sheet_name, df in sheets.items():
+        # 去掉全空行
+        df = df.dropna(how="all").reset_index(drop=True)
+        if df.empty:
+            continue
+
+        # 列名列表（表头）
+        headers = list(df.columns)
+        header_line = "\t".join(str(h) for h in headers)
+
+        # 标题前缀：每个切片都带上文件名和 sheet 名
+        title_prefix = f"文件：{file_name}  Sheet：{sheet_name}\n"
+
+        total_rows = len(df)
+        start = 0
+        while start < total_rows:
+            end = min(start + rows_per_chunk, total_rows)
+            rows = df.iloc[start:end]
+
+            # 拼接内容：标题前缀 + 表头 + 数据行
+            lines = [title_prefix + header_line]
+            for _, row in rows.iterrows():
+                lines.append("\t".join(str(v) for v in row))
+            content = "\n".join(lines)
+
+            chunks.append({
+                "content": content,
+                "metadata": {
+                    **meta,
+                    "chunk_index": chunk_index,
+                    "file_name": file_name,
+                    "sheet_name": sheet_name,
+                    "source": "excel",
+                    "row_start": start,
+                    "row_end": end - 1,
+                },
+            })
+            chunk_index += 1
+            start = end
+
+    return chunks
