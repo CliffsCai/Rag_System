@@ -10,6 +10,10 @@ export const docApi = {
   searchDocuments: (formData) => axios.post(`${BASE}/documents/search`, formData),
   startChunking: (categoryId, params = {}) =>
     axios.post(`${BASE}/documents/start-chunking/${categoryId}`, null, { params }),
+  getExcelColumns: (categoryFileId) =>
+    axios.get(`${BASE}/documents/excel-columns`, { params: { category_file_id: categoryFileId } }),
+  startChunkingExcel: (categoryId, params = {}) =>
+    axios.post(`${BASE}/documents/start-chunking-excel/${categoryId}`, null, { params }),
 
   // ── Job ───────────────────────────────────────────────────────────────────
   listJobs: (kbName, limit = 200) => axios.get(`${BASE}/jobs`, { params: { kb_name: kbName, limit } }),
@@ -57,6 +61,7 @@ export const docApi = {
 
   // ── 类目 ──────────────────────────────────────────────────────────────────
   listCategories: () => axios.get(`${BASE}/categories`),
+  listCategoryFiles: (categoryId) => axios.get(`${BASE}/categories/${categoryId}`),
   createCategory: (data) => axios.post(`${BASE}/categories`, data),
   getCategory: (id) => axios.get(`${BASE}/categories/${id}`),
   updateCategory: (id, data) => axios.put(`${BASE}/categories/${id}`, data),

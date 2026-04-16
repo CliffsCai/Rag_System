@@ -2,8 +2,7 @@
   <el-tabs v-model="activeTab" type="border-card">
 
     <!-- Tab 1: 单文件上传 -->
-    <el-tab-pane label="📄 单文件上传" name="single">
-      <el-card shadow="never" style="margin-top:12px">
+    <el-tab-pane label="📄 单文件上传" name="single">      <el-card shadow="never" style="margin-top:12px">
         <el-alert type="info" :closable="false" show-icon style="margin-bottom:20px"
           :title="imageMode
             ? '图文模式：自定义解析 PDF，提取图片并与切片关联，完成后在文件列表查看结果'
@@ -239,6 +238,15 @@
       </el-card>
     </el-tab-pane>
 
+    <!-- Tab 3: Excel 类目上传 -->
+    <el-tab-pane label="📊 Excel 类目上传" name="excel">
+      <ExcelCategoryUpload
+        :collection="collection"
+        @uploaded="$emit('uploaded', $event)"
+        @go-categories="$emit('go-categories')"
+      />
+    </el-tab-pane>
+
   </el-tabs>
 </template>
 
@@ -247,6 +255,7 @@ import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, QuestionFilled } from '@element-plus/icons-vue'
 import { docApi } from '@/services/docApi'
+import ExcelCategoryUpload from './ExcelCategoryUpload.vue'
 
 const emit = defineEmits(['open-jobs', 'uploaded', 'go-categories'])
 

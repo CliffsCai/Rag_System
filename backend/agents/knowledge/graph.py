@@ -122,8 +122,8 @@ def create_knowledge_agent(checkpointer=None, interrupt_before: Optional[List[st
         }
     )
 
-    # single_doc 路径：Milvus RRF hybrid → 直接 generate
-    builder.add_edge("single_doc_retrieve", "generate_answer")
+    # single_doc 路径：Milvus RRF hybrid → select_top_k / rerank → generate
+    builder.add_edge("single_doc_retrieve", "select_top_k_chunks")
 
     # multi_doc 路径：score 过滤 → rerank → generate
     builder.add_edge("multi_doc_retrieve", "filter_chunks")

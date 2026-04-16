@@ -1,9 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Top-K Select Node - 按分数排序并取 top-K（multi_doc 路径专用）
+Select / Rerank Node（single_doc 和 multi_doc 路径共用）
 
-single_doc 路径经 Milvus RRF 融合后直接进入 generate，不经过此节点。
-注意：此处是基于已有 RRF 分数的排序截断，不是 cross-encoder rerank。
+无 rerank（rerank_enabled=False）：
+  按 RRF score 降序取 llm_context_top_k，与原逻辑完全一致。
+
+有 rerank（rerank_enabled=True，非多模态知识库）：
+  调用 qwen3-rerank 对候选 chunks 重排，
+  single_doc 取 single_doc_rerank_top_k，multi_doc 取 multi_doc_rerank_top_k。
+  rerank 失败时自动降级为原始 score 排序。
+
+数据来源：
+  multi_doc 路径：filtered_chunks（经过 filter_chunks 节点）
+  single_doc 路径：merged_chunks（直接来自检索节点，未经 filter）
+  优先读 filtered_chunks，为空则 fallback 到 merged_chunks。
 """
 
 from typing import Dict, Any
@@ -13,7 +23,6 @@ from ..state import KnowledgeAgentState
 
 
 def _score(chunk) -> float:
-    """兼容 RetrievedChunk dataclass 和 dict 两种格式取分数"""
     if isinstance(chunk, dict):
         return chunk.get("rerank_score") or chunk.get("score", 0.0) or 0.0
     return getattr(chunk, "rerank_score", None) or getattr(chunk, "score", 0.0) or 0.0
@@ -21,20 +30,44 @@ def _score(chunk) -> float:
 
 def select_top_k_chunks(state: KnowledgeAgentState) -> Dict[str, Any]:
     """
-    对 filtered_chunks 按分数降序排列，取 top llm_context_top_k（multi_doc 路径）
-    结果写入 reranked_chunks 和 merged_chunks（供 generate_answer 读取）
+    统一的截断 / rerank 节点，single_doc 和 multi_doc 路径共用。
     """
-    filtered_chunks = state["filtered_chunks"]
+    # 数据来源：filtered_chunks 优先，为空则用 merged_chunks
+    candidates = state.get("filtered_chunks") or state.get("merged_chunks") or []
     config = state["config"]
-    top_k = config.llm_context_top_k
 
-    print(f"\n[TopKSelect] Sorting {len(filtered_chunks)} chunks, top_k={top_k}")
+    is_multi_doc = bool(state.get("filtered_chunks"))  # multi_doc 路径有 filtered_chunks
+    is_multimodal = getattr(config, "kb_type", "standard") == "multimodal"
+    rerank_enabled = getattr(config, "rerank_enabled", False) and not is_multimodal
+
+    print(f"\n[SelectTopK] candidates={len(candidates)}, rerank={rerank_enabled}, multi_doc={is_multi_doc}")
 
     try:
-        sorted_chunks = sorted(filtered_chunks, key=_score, reverse=True)
-        top_chunks = sorted_chunks[:top_k]
+        if rerank_enabled and candidates:
+            # ── Rerank 路径 ──────────────────────────────────────────────────
+            top_k = (
+                getattr(config, "multi_doc_rerank_top_k", 10)
+                if is_multi_doc
+                else getattr(config, "single_doc_rerank_top_k", 5)
+            )
+            query = state.get("rewritten_query") or state.get("query", "")
+            model = getattr(config, "rerank_model_name", "qwen3-rerank")
 
-        print(f"[TopKSelect] Selected top {len(top_chunks)} chunks")
+            from app.services.rerank_service import get_rerank_service
+            top_chunks = get_rerank_service().rerank(
+                query=query,
+                chunks=candidates,
+                model=model,
+                top_n=top_k,
+            )
+            method = f"rerank({model})"
+        else:
+            # ── 原始 score 排序路径 ──────────────────────────────────────────
+            top_k = getattr(config, "llm_context_top_k", 10)
+            top_chunks = sorted(candidates, key=_score, reverse=True)[:top_k]
+            method = "score_sort"
+
+        print(f"[SelectTopK] method={method}, selected={len(top_chunks)}")
 
         metrics = state["metrics"]
         metrics.chunks_after_rerank = len(top_chunks)
@@ -46,11 +79,12 @@ def select_top_k_chunks(state: KnowledgeAgentState) -> Dict[str, Any]:
             "processing_log": [{
                 "stage": "select_top_k",
                 "timestamp": datetime.now().isoformat(),
-                "chunks_in": len(filtered_chunks),
+                "method": method,
+                "chunks_in": len(candidates),
                 "chunks_out": len(top_chunks),
-            }]
+            }],
         }
 
     except Exception as e:
-        print(f"[TopKSelect] Error: {e}")
-        return {"all_errors": [f"Top-K selection failed: {e}"]}
+        print(f"[SelectTopK] Error: {e}")
+        return {"all_errors": [f"select_top_k failed: {e}"]}

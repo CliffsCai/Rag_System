@@ -130,6 +130,11 @@ async def invoke_knowledge_qa(
             kg_graph_id=rc.get("kg_graph_id"),
             kg_top_k=rc.get("kg_top_k", 5),
             kg_timeout_seconds=rc.get("kg_timeout_seconds", 2.0),
+            # Rerank 配置
+            rerank_enabled=rc.get("rerank_enabled", False),
+            rerank_model_name=rc.get("rerank_model_name", "qwen3-rerank"),
+            single_doc_rerank_top_k=rc.get("single_doc_rerank_top_k", 5),
+            multi_doc_rerank_top_k=rc.get("multi_doc_rerank_top_k", 10),
         ),
     )
 
@@ -262,6 +267,11 @@ async def stream_knowledge_qa_sse(
             kg_graph_id=rc.get("kg_graph_id"),
             kg_top_k=rc.get("kg_top_k", 5),
             kg_timeout_seconds=rc.get("kg_timeout_seconds", 2.0),
+            # Rerank 配置
+            rerank_enabled=rc.get("rerank_enabled", False),
+            rerank_model_name=rc.get("rerank_model_name", "qwen3-rerank"),
+            single_doc_rerank_top_k=rc.get("single_doc_rerank_top_k", 5),
+            multi_doc_rerank_top_k=rc.get("multi_doc_rerank_top_k", 10),
         ),
     )
 

@@ -41,11 +41,14 @@
           </el-form-item>
         </el-col>
         <el-col :span="6">
-          <el-form-item label="Rerank因子">
-            <el-input-number v-model="form.rerankFactor" :min="0" :max="10" :step="0.5"
-              :precision="1" style="width:100%"
-              placeholder="不填=不重排" />
-            <div style="font-size:11px;color:#909399">留0=不重排，需>1且topK×因子≤1000</div>
+          <el-form-item label="Rerank">
+            <el-switch v-model="form.rerank" active-text="开启" inactive-text="关闭" />
+          </el-form-item>
+        </el-col>
+        <el-col :span="6" v-if="form.rerank">
+          <el-form-item label="Rerank Top-N">
+            <el-input-number v-model="form.rerankTopN" :min="1" :max="200" style="width:100%" />
+            <div style="font-size:11px;color:#909399">留空=返回全部重排结果</div>
           </el-form-item>
         </el-col>
       </el-row>
@@ -143,18 +146,25 @@ import { ElMessage } from 'element-plus'
 import { docApi } from '@/services/docApi'
 
 const props = defineProps({
-  collection: { type: String, default: '' }
+  collection: { type: String, default: '' },
+  retrievalConfig: { type: Object, default: () => ({}) },
 })
 
-const defaultForm = () => ({
-  query: '',
-  topK: 10,
-  hybridSearch: 'RRF',
-  hybridAlpha: 0.5,
-  rerankFactor: 0,
-  keywordFilter: '',
-  filter: '',
-})
+const defaultForm = () => {
+  const rc = props.retrievalConfig || {}
+  return {
+    query: '',
+    topK: rc.rerank_enabled
+      ? (rc.multi_doc_top_k ?? 20)   // rerank 开启时默认用多文档候选数
+      : (rc.llm_context_top_k ?? 10),
+    hybridSearch: rc.ranker ?? 'RRF',
+    hybridAlpha: rc.hybrid_alpha ?? 0.5,
+    rerank: rc.rerank_enabled ?? false,
+    rerankTopN: rc.multi_doc_rerank_top_k ?? 10,
+    keywordFilter: '',
+    filter: '',
+  }
+}
 
 const form = ref(defaultForm())
 const results = ref([])
@@ -173,6 +183,10 @@ const searched = ref(false)
     fd.append('top_k', form.value.topK)
     fd.append('hybrid_search', form.value.hybridSearch || 'RRF')
     fd.append('hybrid_alpha', form.value.hybridAlpha)
+    if (form.value.rerank) {
+      fd.append('rerank', 'true')
+      fd.append('rerank_top_n', form.value.rerankTopN)
+    }
     if (form.value.keywordFilter) fd.append('keyword_filter', form.value.keywordFilter)
     if (form.value.filter) fd.append('filter_expr', form.value.filter)
 

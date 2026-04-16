@@ -129,7 +129,13 @@ class RAGConfig:
     enable_rerank: bool = True
     rerank_top_k: int = 3          # 内部兼容字段，实际由 llm_context_top_k 控制
     rerank_model: Optional[str] = None
-    llm_context_top_k: int = 10     # 最终送给 LLM 的切片数上限（single_doc / multi_doc 统一）
+    llm_context_top_k: int = 10     # 最终送给 LLM 的切片数上限（rerank 关闭时生效）
+
+    # Qwen3-Rerank 配置（rerank_enabled=True 时生效）
+    rerank_enabled: bool = False                  # 是否启用 rerank 模型（默认关闭）
+    rerank_model_name: str = "qwen3-rerank"       # rerank 模型名称
+    single_doc_rerank_top_k: int = 5              # single_doc 路径 rerank 后送 LLM 的数量
+    multi_doc_rerank_top_k: int = 10              # multi_doc 路径 rerank 后送 LLM 的数量
     ranker: str = "RRF"              # "RRF" | "Weight"
     rrf_k: int = 60
     hybrid_alpha: float = 0.5

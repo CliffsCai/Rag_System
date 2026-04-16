@@ -75,6 +75,44 @@ async def batch_upload_to_category(
     })
 
 
+@router.get("/excel-columns")
+async def get_excel_columns(category_file_id: str = Query(..., description="类目文件 ID")):
+    """获取 Excel 文件所有 sheet 的列名，用于前端列配置弹窗"""
+    result = document_service.get_excel_columns(category_file_id)
+    return JSONResponse(content={"success": True, "data": result})
+
+
+@router.post("/start-chunking-excel/{category_id}")
+async def start_chunking_excel(
+    category_id: str,
+    background_tasks: BackgroundTasks,
+    kb_name: str = Query(..., description="目标知识库名称"),
+    excel_rows_per_chunk: int = Query(50, description="每个切片的数据行数"),
+    excel_configs: str = Query(None, description="JSON 字符串，每个文件的列配置"),
+):
+    """Excel 专用切分接口，支持按文件、按 sheet 配置列选择和列别名"""
+    import json
+    configs = None
+    if excel_configs:
+        try:
+            configs = json.loads(excel_configs)
+        except Exception:
+            return JSONResponse(status_code=422, content={"detail": "excel_configs JSON 格式错误"})
+
+    result = await document_service.start_chunking_excel(
+        category_id=category_id,
+        kb_name=kb_name,
+        background_tasks=background_tasks,
+        excel_rows_per_chunk=excel_rows_per_chunk,
+        excel_configs=configs,
+    )
+    return JSONResponse(content={
+        "success": True,
+        "message": f"已提交 {result['submitted']} 个 Excel 文件",
+        "data": result,
+    })
+
+
 @router.post("/start-chunking/{category_id}")
 async def start_chunking(
     category_id: str,
@@ -114,6 +152,9 @@ async def search_documents(
     hybrid_search: Optional[str] = Form(None),
     hybrid_alpha: float = Form(0.5),
     keyword_filter: Optional[str] = Form(None),
+    rerank: bool = Form(False),
+    rerank_model: str = Form("qwen3-rerank"),
+    rerank_top_n: Optional[int] = Form(None),
 ):
     kb = kb_name or collection
     if not kb:
@@ -126,6 +167,9 @@ async def search_documents(
         ranker=hybrid_search or "RRF",
         hybrid_alpha=hybrid_alpha,
         keyword_filter=keyword_filter or None,
+        rerank=rerank,
+        rerank_model=rerank_model,
+        rerank_top_n=rerank_top_n,
     )
     return JSONResponse(content={
         "success": True,

@@ -46,6 +46,7 @@ async def run_job_pipeline(
     image_dpi: int,
     sync_graph: bool = False,
     excel_rows_per_chunk: int = 50,
+    excel_column_config: dict = None,
 ) -> None:
     """
     完整流水线：
@@ -82,6 +83,7 @@ async def run_job_pipeline(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 excel_rows_per_chunk=excel_rows_per_chunk,
+                excel_column_config=excel_column_config,
             )
             image_records = []
 
@@ -374,6 +376,7 @@ def _parse_text_mode(
     chunk_size: int,
     chunk_overlap: int,
     excel_rows_per_chunk: int = 50,
+    excel_column_config: dict = None,
 ) -> list:
     """
     标准模式：提取文本 → chunk_splitter 切分
@@ -390,6 +393,7 @@ def _parse_text_mode(
             file_name=file_name,
             rows_per_chunk=excel_rows_per_chunk,
             base_metadata={"file_name": file_name, "source": ext},
+            column_config=excel_column_config,
         )
 
     text = _extract_text(file_content, ext, file_name)

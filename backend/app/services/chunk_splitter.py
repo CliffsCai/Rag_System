@@ -159,20 +159,26 @@ def split_excel(
     file_name: str,
     rows_per_chunk: int = 50,
     base_metadata: dict = None,
+    column_config: dict = None,
 ) -> List[dict]:
     """
     将 Excel 文件按 sheet 切分为 chunks。
 
-    规则：
-    - 每个 sheet 独立处理，不同 sheet 的数据不混入同一切片
-    - 每个切片包含：文件名 + sheet 名（标题增强）+ 表头行 + 数据行
-    - 若某 sheet 剩余行数不足 rows_per_chunk，单独成一个切片（不跨 sheet 补齐）
-    - 空 sheet（无数据行）跳过
+    column_config 格式（每文件独立，由前端传入）：
+        {
+          "Sheet1": [
+            {"original": "省份", "alias": "省份"},
+            {"original": "城市", "alias": "城市"},
+            ...
+          ],
+          "Sheet2": [...]
+        }
+    None 表示全选、不改名。
 
-    切片 content 格式：
+    切片 content 格式（key=value，每行一条记录）：
         文件：{file_name}  Sheet：{sheet_name}
-        {col1}\t{col2}\t...
-        {val1}\t{val2}\t...
+        省份=浙江, 城市=杭州, SN=530129
+        省份=山东, 城市=聊城, SN=33318
         ...
     """
     import pandas as pd
@@ -181,39 +187,61 @@ def split_excel(
     chunks = []
     chunk_index = 0
 
-    # read_excel 返回 {sheet_name: DataFrame}，header=0 默认第一行为列名
     sheets: dict = pd.read_excel(
         io.BytesIO(file_content),
-        sheet_name=None,   # 读取所有 sheet
+        sheet_name=None,
         header=0,
-        dtype=str,         # 统一转字符串，避免数值/日期格式问题
+        dtype=str,
         keep_default_na=False,
     )
 
     for sheet_name, df in sheets.items():
-        # 去掉全空行
         df = df.dropna(how="all").reset_index(drop=True)
         if df.empty:
             continue
 
-        # 列名列表（表头）
-        headers = list(df.columns)
-        header_line = "\t".join(str(h) for h in headers)
+        # 确定本 sheet 使用的列配置
+        sheet_cfg = None
+        if column_config and sheet_name in column_config:
+            sheet_cfg = column_config[sheet_name]  # [{original, alias}, ...]
 
-        # 标题前缀：每个切片都带上文件名和 sheet 名
+        if sheet_cfg is not None:
+            # 只保留配置中存在于 df 的列
+            valid_cols = [c for c in sheet_cfg if c["original"] in df.columns]
+            if not valid_cols:
+                continue
+            orig_cols = [c["original"] for c in valid_cols]
+            alias_map = {c["original"]: c["alias"] or c["original"] for c in valid_cols}
+            df = df[orig_cols]
+        else:
+            # 全选，alias = original
+            orig_cols = list(df.columns)
+            alias_map = {c: c for c in orig_cols}
+
         title_prefix = f"文件：{file_name}  Sheet：{sheet_name}\n"
-
         total_rows = len(df)
         start = 0
+
         while start < total_rows:
             end = min(start + rows_per_chunk, total_rows)
             rows = df.iloc[start:end]
 
-            # 拼接内容：标题前缀 + 表头 + 数据行
-            lines = [title_prefix + header_line]
+            # 每行格式：alias1=val1, alias2=val2, ...
+            lines = []
             for _, row in rows.iterrows():
-                lines.append("\t".join(str(v) for v in row))
-            content = "\n".join(lines)
+                parts = []
+                for col in orig_cols:
+                    val = str(row[col]).strip()
+                    if val:  # 跳过空值，减少噪音
+                        parts.append(f"{alias_map[col]}={val}")
+                if parts:
+                    lines.append(", ".join(parts))
+
+            if not lines:
+                start = end
+                continue
+
+            content = title_prefix + "\n".join(lines)
 
             chunks.append({
                 "content": content,

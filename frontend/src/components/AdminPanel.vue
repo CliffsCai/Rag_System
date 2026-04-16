@@ -25,7 +25,7 @@
           <DocList ref="docListRef" :collection="currentCollection.name" @view-chunks="openChunkEditor" />
         </el-tab-pane>
         <el-tab-pane label="🔍 切片检索" name="search">
-          <DocSearch :collection="currentCollection.name" />
+          <DocSearch :collection="currentCollection.name" :retrieval-config="currentCollection.retrieval_config" />
         </el-tab-pane>
       </el-tabs>
 
@@ -94,43 +94,62 @@
         <!-- 检索配置 dialog -->
         <el-dialog v-model="retrievalDialogVisible" :title="`检索配置 — ${retrievalTarget?.name}`" width="520px" destroy-on-close>
           <el-form :model="retrievalForm" label-width="160px">
-            <el-form-item label="Rerank 策略">
+
+            <el-divider content-position="left">混合检索</el-divider>
+            <el-form-item label="融合策略">
               <el-radio-group v-model="retrievalForm.ranker">
-                <el-radio value="RRF">RRF（倒数排名融合）</el-radio>
-                <el-radio value="Weight">Weighted（加权）</el-radio>
+                <el-radio value="RRF">RRF（推荐）</el-radio>
+                <el-radio value="Weight">Weighted</el-radio>
               </el-radio-group>
             </el-form-item>
-            <el-form-item label="Dense 权重 (α)">
+            <el-form-item v-if="retrievalForm.ranker === 'Weight'" label="Dense 权重 (α)">
               <el-slider v-model="retrievalForm.hybrid_alpha" :min="0" :max="1" :step="0.05"
-                :disabled="retrievalForm.ranker !== 'Weight'" show-input :input-size="'small'" style="width:280px" />
-              <div class="tip">仅 Weighted 策略生效，Sparse 权重 = 1 - α</div>
+                show-input :input-size="'small'" style="width:280px" />
+              <div class="tip">Sparse 权重 = 1 - α</div>
             </el-form-item>
-            <el-divider content-position="left">多文档检索</el-divider>
-            <el-form-item label="返回文档数">
-              <el-input-number v-model="retrievalForm.multi_doc_top_k" :min="1" :max="100" style="width:120px" />
-              <div class="tip">最多返回多少个不同文档的结果</div>
+
+            <el-divider content-position="left">检索数量</el-divider>
+            <el-form-item label="多文档：文档数">
+              <el-input-number v-model="retrievalForm.multi_doc_top_k" :min="1" :max="500" style="width:120px" />
+              <div class="tip">{{ retrievalForm.rerank_enabled ? '作为 Rerank 候选池，建议 ≥ 50' : '最多返回多少个不同文档的结果' }}</div>
             </el-form-item>
-            <el-form-item label="每文档 Chunk 数">
-              <el-input-number v-model="retrievalForm.multi_doc_group_size" :min="1" :max="10" style="width:120px" />
+            <el-form-item label="多文档：每文档 Chunk">
+              <el-input-number v-model="retrievalForm.multi_doc_group_size" :min="1" :max="20" style="width:120px" />
               <div class="tip">每个文档最多取几个最相关 chunk</div>
+            </el-form-item>
+            <el-form-item label="单文档：Chunk 数">
+              <el-input-number v-model="retrievalForm.single_doc_top_k" :min="1" :max="500" style="width:120px" />
+              <div class="tip">{{ retrievalForm.rerank_enabled ? '作为 Rerank 候选池，建议 ≥ 30' : '检索返回的 chunk 数量' }}</div>
             </el-form-item>
             <el-form-item label="严格 Chunk 数">
               <el-switch v-model="retrievalForm.strict_group_size" active-text="开启" inactive-text="关闭" />
-              <div class="tip">开启后强制凑满每文档 chunk 数，可能影响性能</div>
+              <div class="tip">强制凑满每文档 chunk 数，通常无需开启</div>
             </el-form-item>
-            <el-divider content-position="left">单文档检索</el-divider>
-            <el-form-item label="返回 Chunk 数">
-              <el-input-number v-model="retrievalForm.single_doc_top_k" :min="1" :max="100" style="width:120px" />
+
+            <el-divider content-position="left">生成</el-divider>
+            <el-form-item label="启用 Rerank">
+              <el-switch v-model="retrievalForm.rerank_enabled" active-text="开启" inactive-text="关闭" />
+              <div class="tip">用 qwen3-rerank 重排候选切片，提升精度，增加约 1-2s 延迟</div>
             </el-form-item>
-            <el-divider content-position="left">生成配置</el-divider>
-            <el-form-item label="送给 LLM 的切片数">
-              <el-input-number v-model="retrievalForm.llm_context_top_k" :min="1" :max="20" style="width:120px" />
-              <div class="tip">检索后最终送入 LLM 的切片上限，影响回答质量与 token 消耗</div>
+            <el-form-item v-if="!retrievalForm.rerank_enabled" label="送给 LLM 的切片数">
+              <el-input-number v-model="retrievalForm.llm_context_top_k" :min="1" :max="50" style="width:120px" />
+              <div class="tip">按检索分数取 top-N 送入 LLM，默认 10</div>
             </el-form-item>
+            <template v-if="retrievalForm.rerank_enabled">
+              <el-form-item label="单文档 Top-K">
+                <el-input-number v-model="retrievalForm.single_doc_rerank_top_k" :min="1" :max="50" style="width:120px" />
+                <div class="tip">Rerank 后送入 LLM 的切片数</div>
+              </el-form-item>
+              <el-form-item label="多文档 Top-K">
+                <el-input-number v-model="retrievalForm.multi_doc_rerank_top_k" :min="1" :max="50" style="width:120px" />
+                <div class="tip">Rerank 后送入 LLM 的切片数</div>
+              </el-form-item>
+            </template>
             <el-form-item label="对话记忆轮数">
               <el-input-number v-model="retrievalForm.memory_turns" :min="1" :max="10" style="width:120px" />
-              <div class="tip">保留最近 N 轮对话历史（每轮=1问+1答），用于查询改写和生成，默认 2</div>
+              <div class="tip">保留最近 N 轮历史用于查询改写，默认 2</div>
             </el-form-item>
+
           </el-form>
           <template #footer>
             <el-button @click="retrievalDialogVisible = false">取消</el-button>
@@ -248,38 +267,47 @@
             </el-form-item>
 
             <el-divider content-position="left">检索配置</el-divider>
-            <el-form-item label="Rerank 策略">
+            <el-form-item label="融合策略">
               <el-radio-group v-model="colForm.retrieval_config.ranker">
-                <el-radio value="RRF">RRF（倒数排名融合）</el-radio>
-                <el-radio value="Weight">Weighted（加权）</el-radio>
+                <el-radio value="RRF">RRF（推荐）</el-radio>
+                <el-radio value="Weight">Weighted</el-radio>
               </el-radio-group>
             </el-form-item>
-            <el-form-item label="Dense 权重 (α)">
+            <el-form-item v-if="colForm.retrieval_config.ranker === 'Weight'" label="Dense 权重 (α)">
               <el-slider v-model="colForm.retrieval_config.hybrid_alpha" :min="0" :max="1" :step="0.05"
-                :disabled="colForm.retrieval_config.ranker !== 'Weight'" show-input :input-size="'small'" style="width:280px" />
-              <div class="tip">仅 Weighted 策略生效，Sparse 权重 = 1 - α</div>
+                show-input :input-size="'small'" style="width:280px" />
+              <div class="tip">Sparse 权重 = 1 - α</div>
             </el-form-item>
-            <el-form-item label="多文档：返回文档数">
-              <el-input-number v-model="colForm.retrieval_config.multi_doc_top_k" :min="1" :max="100" style="width:120px" />
+            <el-form-item label="多文档：文档数">
+              <el-input-number v-model="colForm.retrieval_config.multi_doc_top_k" :min="1" :max="500" style="width:120px" />
+              <div class="tip">{{ colForm.retrieval_config.rerank_enabled ? '作为 Rerank 候选池，建议 ≥ 50' : '最多返回多少个不同文档的结果' }}</div>
             </el-form-item>
-            <el-form-item label="多文档：每文档 Chunk 数">
-              <el-input-number v-model="colForm.retrieval_config.multi_doc_group_size" :min="1" :max="10" style="width:120px" />
+            <el-form-item label="多文档：每文档 Chunk">
+              <el-input-number v-model="colForm.retrieval_config.multi_doc_group_size" :min="1" :max="20" style="width:120px" />
             </el-form-item>
-            <el-form-item label="多文档：严格 Chunk 数">
-              <el-switch v-model="colForm.retrieval_config.strict_group_size" active-text="开启" inactive-text="关闭" />
+            <el-form-item label="单文档：Chunk 数">
+              <el-input-number v-model="colForm.retrieval_config.single_doc_top_k" :min="1" :max="500" style="width:120px" />
+              <div class="tip">{{ colForm.retrieval_config.rerank_enabled ? '作为 Rerank 候选池，建议 ≥ 30' : '检索返回的 chunk 数量' }}</div>
             </el-form-item>
-            <el-form-item label="单文档：返回 Chunk 数">
-              <el-input-number v-model="colForm.retrieval_config.single_doc_top_k" :min="1" :max="100" style="width:120px" />
+            <el-divider content-position="left">生成</el-divider>
+            <el-form-item label="启用 Rerank">
+              <el-switch v-model="colForm.retrieval_config.rerank_enabled" active-text="开启" inactive-text="关闭" />
+              <div class="tip">用 qwen3-rerank 重排候选切片，提升精度，增加约 1-2s 延迟</div>
             </el-form-item>
-            <el-divider content-position="left">生成配置</el-divider>
-            <el-form-item label="送给 LLM 的切片数">
-              <el-input-number v-model="colForm.retrieval_config.llm_context_top_k" :min="1" :max="20" style="width:120px" />
-              <div class="tip">检索后最终送入 LLM 的切片上限，影响回答质量与 token 消耗</div>
+            <el-form-item v-if="!colForm.retrieval_config.rerank_enabled" label="送给 LLM 的切片数">
+              <el-input-number v-model="colForm.retrieval_config.llm_context_top_k" :min="1" :max="50" style="width:120px" />
+              <div class="tip">按检索分数取 top-N 送入 LLM，默认 10</div>
             </el-form-item>
-            <el-form-item label="对话记忆轮数">
-              <el-input-number v-model="colForm.retrieval_config.memory_turns" :min="1" :max="10" style="width:120px" />
-              <div class="tip">保留最近 N 轮对话历史（每轮=1问+1答），用于查询改写和生成，默认 2</div>
-            </el-form-item>
+            <template v-if="colForm.retrieval_config.rerank_enabled">
+              <el-form-item label="单文档 Top-K">
+                <el-input-number v-model="colForm.retrieval_config.single_doc_rerank_top_k" :min="1" :max="50" style="width:120px" />
+                <div class="tip">Rerank 后送入 LLM 的切片数</div>
+              </el-form-item>
+              <el-form-item label="多文档 Top-K">
+                <el-input-number v-model="colForm.retrieval_config.multi_doc_rerank_top_k" :min="1" :max="50" style="width:120px" />
+                <div class="tip">Rerank 后送入 LLM 的切片数</div>
+              </el-form-item>
+            </template>
 
             <el-form-item>
               <el-button type="primary" @click="createCollection" :loading="colCreateLoading">创建知识库</el-button>
@@ -444,6 +472,10 @@ const defaultColForm = () => ({
     llm_context_top_k: 10,
     image_vector_dim: 1024,
     memory_turns: 2,
+    rerank_enabled: false,
+    rerank_model_name: 'qwen3-rerank',
+    single_doc_rerank_top_k: 5,
+    multi_doc_rerank_top_k: 10,
   },
 })
 const colForm = ref(defaultColForm())
@@ -514,6 +546,8 @@ const defaultRetrievalForm = () => ({
   ranker: 'RRF', hybrid_alpha: 0.5,
   multi_doc_top_k: 20, multi_doc_group_size: 3, strict_group_size: false,
   single_doc_top_k: 20, llm_context_top_k: 10, memory_turns: 2,
+  rerank_enabled: false, rerank_model_name: 'qwen3-rerank',
+  single_doc_rerank_top_k: 5, multi_doc_rerank_top_k: 10,
 })
 const retrievalForm = ref(defaultRetrievalForm())
 
@@ -529,6 +563,10 @@ const openRetrievalDialog = (row) => {
     single_doc_top_k:      rc.single_doc_top_k      ?? 20,
     llm_context_top_k:     rc.llm_context_top_k     ?? 10,
     memory_turns:          rc.memory_turns          ?? 2,
+    rerank_enabled:        rc.rerank_enabled        ?? false,
+    rerank_model_name:     rc.rerank_model_name     ?? 'qwen3-rerank',
+    single_doc_rerank_top_k: rc.single_doc_rerank_top_k ?? 5,
+    multi_doc_rerank_top_k:  rc.multi_doc_rerank_top_k  ?? 10,
   }
   retrievalDialogVisible.value = true
 }

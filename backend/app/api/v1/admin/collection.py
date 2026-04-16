@@ -29,7 +29,12 @@ class RetrievalConfig(BaseModel):
     strict_group_size: bool = False
     single_doc_top_k: int = 20
     llm_context_top_k: int = 10
-    image_vector_dim: int = 1024             # 多模态知识库图片向量维度
+    image_vector_dim: int = 1024
+    # Rerank 配置
+    rerank_enabled: bool = False
+    rerank_model_name: str = "qwen3-rerank"
+    single_doc_rerank_top_k: int = 5
+    multi_doc_rerank_top_k: int = 10
 
 
 class CreateKbRequest(BaseModel):
