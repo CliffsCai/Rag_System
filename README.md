@@ -185,12 +185,6 @@ graph LR
 
 ---
 
-## 📖 详细架构
-
-完整的架构说明、数据库表结构、API 路由、RAG 流程细节见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
-
----
-
 ## License
 
 MIT © 2026 cwl
