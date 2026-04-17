@@ -9,6 +9,7 @@
 - **业务数据库**：PostgreSQL（Docker）
 - **对象存储**：阿里云 OSS
 - **Embedding**：DashScope text-embedding-v3 / text-embedding-v4（自调用，批量，支持自定义维度）
+- **Rerank**：DashScope qwen3-rerank（可选，对检索结果重排）
 - **DB 驱动**：psycopg2（业务层）+ psycopg3（LangGraph checkpoint 专用，两者共存互不干扰）
 
 ---
@@ -73,10 +74,11 @@ backend/
 │   │       └── config.py          # 系统配置查询
 │   ├── services/
 │   │   ├── milvus_service.py      # Milvus：collection管理/upsert/hybrid_search（支持分组搜索）
-│   │   ├── embedding_service.py   # DashScope embedding，支持 dimension 参数
-│   │   ├── chunk_splitter.py      # 纯文本切分（标准模式），中文友好
-│   │   ├── document_service.py    # 文档上传（同名拒绝覆盖，关联 __default__ 类目）
-│   │   ├── job_service.py         # run_job_pipeline：chunking→chunked（手动触发向量化）
+│   │   ├── embedding_service.py   # DashScope embedding，支持 dimension 参数；重试次数 5 次，指数退避最长 60s；batch_size 默认 10（text-embedding-v3 上限）
+│   │   ├── chunk_splitter.py      # 纯文本切分（标准模式）+ Excel 切分（split_excel，支持列选择和别名），中文友好
+│   │   ├── rerank_service.py      # 封装 dashscope.TextReRank.call（qwen3-rerank），失败自动降级为原始分数排序
+│   │   ├── document_service.py    # 文档上传（同名拒绝覆盖，关联 __default__ 类目）；get_excel_columns；start_chunking_excel
+│   │   ├── job_service.py         # run_job_pipeline：chunking→chunked（手动触发向量化）；_upsert_chunks_in_batches 分批容错（每批100条，失败重试5次）
 │   │   ├── chunk_service.py       # 切片编辑/清洗/撤回/向量化/图片管理/resolve_image_placeholders
 │   │   ├── file_service.py        # 知识库文件列表/联动删除（含 OSS 图片清理 + __default__ 类目清理）
 │   │   ├── category_service.py    # 类目 CRUD（含 get_or_create_default_category）
@@ -137,7 +139,13 @@ backend/
   "multi_doc_top_k": 20,
   "multi_doc_group_size": 3,
   "strict_group_size": false,
-  "single_doc_top_k": 20
+  "single_doc_top_k": 20,
+  "llm_context_top_k": 10,
+  "memory_turns": 2,
+  "rerank_enabled": false,
+  "rerank_model_name": "qwen3-rerank",
+  "single_doc_rerank_top_k": 5,
+  "multi_doc_rerank_top_k": 10
 }
 ```
 
@@ -210,7 +218,7 @@ POST /documents/upload (kb_name, file)
   → BackgroundTask: run_job_pipeline()
 ```
 
-**路径二：类目文件批量切分**
+**路径二：类目文件批量切分（标准）**
 ```
 POST /documents/start-chunking/{category_id}?kb_name=xxx
   → 遍历 category_file
@@ -219,10 +227,20 @@ POST /documents/start-chunking/{category_id}?kb_name=xxx
   → BackgroundTask: run_job_pipeline()
 ```
 
+**路径三：Excel 类目专用切分**
+```
+POST /documents/start-chunking-excel/{category_id}
+  body: { kb_name, chunk_size, excel_configs: { file_id: { sheet_name: { columns, aliases } } } }
+  → 遍历 category_file（仅 .xlsx/.xls）
+  → 检查同名文件是否已存在，存在则跳过
+  → 写 knowledge_file + knowledge_job
+  → BackgroundTask: run_job_pipeline()（切分时调用 split_excel，传入 column_config）
+```
+
 **切分流水线**
 ```
 run_job_pipeline():
-  chunking → 下载 OSS → 切分（图文/标准）
+  chunking → 下载 OSS → 切分（图文/标准/Excel）
     └── 注入 auto_inject 元数据（如 title = 文件名前缀）
   chunked → 写 knowledge_chunk（UUID 主键）+ origin
     ← 停在此状态，等待人工审查后手动触发向量化
@@ -230,7 +248,9 @@ run_job_pipeline():
 POST /chunks/job/{job_id}/upsert（手动触发）
   → 读 PG chunks → 剥离图片占位符（<<IMAGE:xxx>>）得到 clean_content
   → fulltext 字段拼接到 clean_content 前（BM25 + dense 都感知，但不含占位符噪音）
-  → embed → upsert Milvus（content 存 fulltext前缀+clean_content）→ mark_vectorized → done
+  → _upsert_chunks_in_batches：每批 100 条独立 embed + upsert，单批失败最多重试 5 次（指数退避）
+     部分批次失败时 job 保持 chunked 状态（不 mark_vectorized），提示用户重试；upsert 幂等，重试安全
+  → 全部成功 → mark_vectorized → done
 ```
 
 ### 2. RAG 问答流程
@@ -283,9 +303,17 @@ query_rewrite（多轮指代消解）→ query_classify → determine_retrieval_
   - keyword_filter 有值 → 跳过规则判断，直接 KEYWORD_ONLY
   ↓
   route_by_query_type:
-    single_doc → single_doc_retrieve → generate_answer
+    single_doc → single_doc_retrieve → select_top_k_chunks → generate_answer
     multi_doc  → multi_doc_retrieve（分组搜索 group_by_field=file_name）
-               → filter_chunks → rerank_chunks → generate_answer
+               → filter_chunks → select_top_k_chunks → generate_answer
+
+  [select_top_k_chunks 节点]
+  - rerank_enabled=False：按 RRF score 排序，取 llm_context_top_k 条（原逻辑）
+  - rerank_enabled=True（非多模态）：
+      调用 rerank_service（qwen3-rerank）对候选切片重排
+      single_doc 路径：取 single_doc_rerank_top_k 条
+      multi_doc 路径：取 multi_doc_rerank_top_k 条
+  - 多模态知识库：跳过 rerank，直接按 RRF score 截取
 
   [检索后处理]
   hybrid_search 返回 hits 后，批量查 PG knowledge_chunk（WHERE id IN chunk_ids），
@@ -410,8 +438,12 @@ DELETE /files（file_id）
 | `multi_doc_group_size` | 多文档：每文档取 chunk 数 | 3 |
 | `strict_group_size` | 多文档：是否严格凑满 group_size | false |
 | `single_doc_top_k` | 单文档：返回 chunk 数 | 20 |
-| `llm_context_top_k` | 最终送入 LLM 的切片数上限 | 10 |
+| `llm_context_top_k` | 最终送入 LLM 的切片数上限（rerank 关闭时生效） | 10 |
 | `memory_turns` | 对话记忆轮数（每轮=1问+1答），用于改写和生成 | 2 |
+| `rerank_enabled` | 是否启用 rerank 模型 | false |
+| `rerank_model_name` | rerank 模型名称 | `qwen3-rerank` |
+| `single_doc_rerank_top_k` | single_doc 路径 rerank 后送 LLM 的切片数 | 5 |
+| `multi_doc_rerank_top_k` | multi_doc 路径 rerank 后送 LLM 的切片数 | 10 |
 
 配置在创建知识库时设定，也可通过 `PUT /admin/collections/{kb_name}` 随时更新。
 
@@ -450,8 +482,10 @@ DELETE /files（file_id）
 | `POST /api/v1/documents/upload` | 单文件上传到知识库（同名拒绝，关联 __default__ 类目） |
 | `POST /api/v1/documents/upload-to-category` | 上传文件到类目（OSS） |
 | `POST /api/v1/documents/start-chunking/{category_id}` | 触发类目批量切分（同名跳过，返回 skipped） |
-| `POST /api/v1/documents/search` | 切片检索（支持 keyword_filter + hybrid） |
+| `POST /api/v1/documents/search` | 切片检索（支持 keyword_filter + hybrid；新增 rerank/rerank_model/rerank_top_n 参数） |
 | `GET /api/v1/documents/image-proxy` | OSS 图片代理（降级方案） |
+| `GET /api/v1/documents/excel-columns` | 获取 Excel 文件所有 sheet 的列名（`?category_file_id=xxx`） |
+| `POST /api/v1/documents/start-chunking-excel/{category_id}` | Excel 专用切分（含 excel_configs 列配置） |
 | `GET /api/v1/jobs` | 任务列表（需 kb_name） |
 | `POST /api/v1/jobs/{job_id}/upsert` | 手动触发向量化 |
 | `GET /api/v1/chunks/job/{job_id}` | 查看切片 |
@@ -511,7 +545,7 @@ DELETE /files（file_id）
 知识库创建时的 `vector_dim` 必须与 embedding 模型实际输出维度一致。已有 collection 需删除重建。
 
 **Q: 图文模式支持哪些格式？**
-仅 `.pdf` 和 `.docx`。标准模式支持 `.pdf`、`.doc`、`.docx`、`.txt`、`.md`、`.ppt`、`.pptx`。
+仅 `.pdf` 和 `.docx`。标准模式支持 `.pdf`、`.doc`、`.docx`、`.txt`、`.md`、`.ppt`、`.pptx`。Excel 格式（`.xlsx`、`.xls`）通过专用 Excel 切分流程处理，不走图文模式。
 
 **Q: 切分后 job 状态停在 chunked？**
 正常，切分和向量化已解耦。在文件列表页选中文件点"上传向量库"手动触发。
@@ -537,6 +571,15 @@ DELETE /files（file_id）
 **Q: Attu 端口冲突？**
 `docker-compose.yml` 中 attu 映射的是宿主机 `8080:3000`，后端用 `8000`，不冲突。
 
+**Q: EMBEDDING_BATCH_SIZE 设多少合适？**
+`text-embedding-v3` 单批上限为 10 条，默认值已从 20 修正为 10。若遇到 embedding 报错，检查 `.env` 中 `EMBEDDING_BATCH_SIZE` 是否超过 10。
+
+**Q: 向量化大文件时 job 卡在 chunked 或部分失败？**
+`job_service._upsert_chunks_in_batches` 会将切片分批（每批 100 条）独立 embed + upsert，单批失败最多重试 5 次（指数退避，最长等待 60s）。若部分批次最终失败，job 保持 `chunked` 状态，不会 mark_vectorized，可在文件列表页重新点"上传向量库"安全重试（upsert 幂等）。
+
+**Q: Rerank 如何开启？**
+在知识库检索配置中将 `rerank_enabled` 设为 `true`，并确认 `rerank_model_name`（默认 `qwen3-rerank`）已在 DashScope 开通权限。多模态知识库不支持 rerank，会自动跳过。
+
 **图片占位符完整处理链路**
 切片阶段（doc_image_parser.py）
 
@@ -561,3 +604,50 @@ content 字段（含占位符）直接送入 DashScope embedding，同时作为 
 实时回答：image_map 随 API 响应返回，前端把 <<IMAGE:xxx>> 替换成 ![image](presigned_url) 再用 markdown-it 渲染。
 
 历史消息：conversation_message.image_placeholders 存占位符列表，加载历史时批量调 POST /chunks/resolve-images 获取预签名 URL，再替换渲染。
+
+---
+
+## Excel 切分
+
+### 专用流程
+
+Excel 文件（`.xlsx`、`.xls`）不走标准文本切分，而是通过专用流程处理：
+
+```
+前端 DocUpload.vue → "📊 Excel 类目上传" Tab → ExcelCategoryUpload.vue
+  1. 选类目 + 目标知识库 + 每片行数
+  2. 点"开始切分"弹窗：
+       GET /documents/excel-columns?category_file_id=xxx
+         → 读取 Excel 所有 sheet 的列名，返回 { sheet_name: [col1, col2, ...] }
+  3. 逐文件逐 sheet 配置列（勾选需要的列 + 可改别名），支持全选/取消全选
+  4. 确认后提交：
+       POST /documents/start-chunking-excel/{category_id}
+         body: { kb_name, chunk_size, excel_configs: { file_id: { sheet_name: { columns: [...], aliases: {...} } } } }
+  5. 进入标准 chunked → 向量化流程
+```
+
+### split_excel 函数
+
+`chunk_splitter.split_excel(file_path, chunk_size, column_config)` 逻辑：
+
+- 用 `pandas.read_excel` 读取所有 sheet
+- `column_config` 参数格式：`{ sheet_name: { "columns": ["col_a", "col_b"], "aliases": {"col_a": "名称"} } }`
+  - 不传 `column_config` 时默认读取所有列
+  - `aliases` 可选，指定列的显示别名
+- 切片格式：每行转为 `key=value` 对，带文件名 + sheet 名前缀，例如：
+  ```
+  [产品列表 / Sheet1]
+  名称=螺丝刀
+  规格=M3
+  价格=5.5
+  ```
+- 不同 sheet 的行不混入同一切片，sheet 边界强制分割
+- 每个切片包含 `chunk_size` 行数据（最后一片可能不足）
+
+### docApi.js 新增接口
+
+| 函数 | 说明 |
+|------|------|
+| `getExcelColumns(categoryFileId)` | 获取 Excel 所有 sheet 列名 |
+| `startChunkingExcel(categoryId, payload)` | 提交 Excel 专用切分 |
+| `listCategoryFiles(categoryId)` | 获取类目文件列表 |

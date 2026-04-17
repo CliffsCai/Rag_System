@@ -1,31 +1,51 @@
-# Knowledge Base RAG System
+# 🧠 Knowledge Base RAG System
 
-一个基于 LangGraph + Milvus 的企业级知识库问答系统，支持多轮对话、混合检索、图文解析。
+> 基于 LangGraph + Milvus 的企业级知识库问答系统，支持多轮对话、混合检索、Rerank、图文解析、Excel 结构化切分。
 
-## 技术栈
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python" />
+  <img src="https://img.shields.io/badge/FastAPI-0.100+-green?logo=fastapi" />
+  <img src="https://img.shields.io/badge/Vue-3-brightgreen?logo=vue.js" />
+  <img src="https://img.shields.io/badge/Milvus-2.x-blue" />
+  <img src="https://img.shields.io/badge/LangGraph-latest-orange" />
+  <img src="https://img.shields.io/badge/License-MIT-yellow" />
+</p>
 
-**后端**
-- FastAPI + Uvicorn
-- LangGraph（StateGraph + AsyncPostgresSaver）
-- 阿里云 DashScope（Qwen 系列 LLM + Embedding）
-- Milvus Standalone（向量数据库，混合检索）
-- PostgreSQL（业务数据 + LangGraph checkpoint）
-- 阿里云 OSS（文件存储）
+---
 
-**前端**
-- Vue 3 + Vite
+## 📸 界面预览
 
-## 快速开始
+<p align="center">
+  <img src="docs/首页.png" width="100%" alt="系统首页" />
+</p>
+
+<p align="center">
+  <img src="docs/对话页面.png" width="49%" alt="知识库问答" />
+  <img src="docs/对话效果.png" width="49%" alt="对话效果" />
+</p>
+
+---
+
+## ✨ 功能亮点
+
+- **多轮对话记忆** — 基于 LangGraph checkpointer，重启不丢失，支持指代消解
+- **混合检索** — Dense（语义）+ BM25（关键词）+ RRF 融合，可选 Rerank 精排
+- **Rerank 支持** — 集成 qwen3-rerank，检索候选池与最终 top-k 独立配置
+- **图文模式** — 自动提取 PDF/DOCX 图片，与文本切片关联，LLM 回答可展示图片
+- **Excel 结构化切分** — 逐 sheet 配置列选择和别名，每行转为 `key=value` 格式，LLM 精准理解表格
+- **切分与向量化解耦** — 切分后人工审查，手动触发向量化；大文件分批容错，失败可重试
+- **每库独立检索配置** — ranker / top_k / group_size / memory_turns / rerank 参数按知识库隔离
+- **知识图谱联动** — 可选同步切片到知识图谱，RAG 问答融合图谱检索结果
+
+---
+
+## 🚀 快速开始
 
 ### 1. 启动基础服务
 
 ```bash
 docker-compose up -d
-```
-
-首次启动需等待 30-60 秒，直到所有服务变为 `healthy`：
-
-```bash
+# 首次启动需等待 30-60 秒，直到所有服务变为 healthy
 docker-compose ps
 ```
 
@@ -36,37 +56,25 @@ cd backend
 cp .env.example .env
 ```
 
-编辑 `.env`，填写必填项：
-
-| 变量 | 说明 |
-|------|------|
+| 必填变量 | 说明 |
+|----------|------|
 | `DASHSCOPE_API_KEY` | 阿里云 DashScope API Key |
-| `ALIBABA_CLOUD_ACCESS_KEY_ID` | 阿里云 AccessKey ID（OSS 用） |
-| `ALIBABA_CLOUD_ACCESS_KEY_SECRET` | 阿里云 AccessKey Secret（OSS 用） |
+| `ALIBABA_CLOUD_ACCESS_KEY_ID` | 阿里云 AccessKey ID（OSS） |
+| `ALIBABA_CLOUD_ACCESS_KEY_SECRET` | 阿里云 AccessKey Secret（OSS） |
 | `OSS_BUCKET` | OSS Bucket 名称 |
+| `PG_HOST` / `PG_USER` / `PG_PASSWORD` | PostgreSQL 连接信息 |
 
-其余配置项有默认值，本地开发无需修改。
-
-### 3. 安装依赖
+### 3. 安装依赖并启动后端
 
 ```bash
 pip install -r requirements.txt
-```
-
-> LangGraph checkpoint 需要额外安装：
-> ```bash
-> pip install "psycopg[binary]" langgraph-checkpoint-postgres
-> ```
-
-### 4. 启动后端
-
-```bash
+pip install "psycopg[binary]" langgraph-checkpoint-postgres  # LangGraph checkpoint 依赖
 python main.py
 ```
 
-启动时自动建表并初始化 LangGraph checkpoint 表。后端默认运行在 `http://localhost:8000`。
+后端默认运行在 `http://localhost:8000`，启动时自动建表。
 
-### 5. 启动前端
+### 4. 启动前端
 
 ```bash
 cd frontend
@@ -78,58 +86,66 @@ npm run dev
 
 ---
 
-## 项目结构
+## 🗺️ RAG 流水线
+
+```mermaid
+graph LR
+    A[用户提问] --> B[query_rewrite\n多轮指代消解]
+    B --> C[query_classify\nsingle / multi]
+    C --> D{路由}
+    D -->|single_doc| E[single_doc_retrieve]
+    D -->|multi_doc| F[multi_doc_retrieve\n分组搜索]
+    F --> G[filter_chunks]
+    G --> H[select_top_k\n/ rerank]
+    E --> H
+    H --> I[generate_answer]
+    I --> J[quality_check]
+    J --> K[finalize_metrics]
+```
+
+---
+
+## 🛠️ 技术栈
+
+| 层 | 技术 |
+|----|------|
+| 后端框架 | FastAPI + Uvicorn |
+| Agent 编排 | LangGraph（StateGraph + AsyncPostgresSaver） |
+| LLM / Embedding / Rerank | 阿里云 DashScope（Qwen 系列） |
+| 向量数据库 | Milvus Standalone |
+| 业务数据库 | PostgreSQL |
+| 对象存储 | 阿里云 OSS |
+| 前端 | Vue 3 + Vite + Element Plus |
+
+---
+
+## 📁 项目结构
+
+<details>
+<summary>展开查看</summary>
 
 ```
-├── docker-compose.yml        # Milvus + PostgreSQL + MinIO + Attu
+├── docker-compose.yml
 ├── backend/
-│   ├── main.py               # 入口
-│   ├── requirements.txt
-│   ├── .env.example          # 环境变量模板
 │   ├── app/
 │   │   ├── api/v1/           # REST API 路由
 │   │   ├── core/             # 配置、日志、异常、Prompt
-│   │   ├── services/         # 业务逻辑
-│   │   └── db/               # 数据库 Repository
+│   │   ├── services/         # 业务逻辑（含 rerank_service、chunk_splitter）
+│   │   └── db/               # Repository 层
 │   └── agents/
-│       ├── knowledge/        # RAG Agent（核心）
-│       ├── supervisor/       # Supervisor Agent
-│       └── specialized/      # 专用 Agent（email/search）
-└── frontend/
-    └── src/
-        ├── components/       # Vue 组件
-        └── services/         # API 调用
+│       └── knowledge/        # RAG Agent（核心流水线）
+├── frontend/
+│   └── src/
+│       ├── components/       # Vue 组件（含 ExcelCategoryUpload）
+│       └── services/         # API 调用（docApi.js）
+└── docs/                     # 架构文档 + 截图
 ```
 
----
-
-## 核心功能
-
-### 知识库管理
-- 创建知识库，支持独立配置 embedding 模型、向量维度、检索参数
-- 文档上传（PDF / DOCX / TXT / MD / PPT），同名文件拒绝覆盖
-- 切分与向量化解耦：切分后人工审查，手动触发向量化
-- 图文模式：自动提取 PDF/DOCX 中的图片，与文本切片关联
-
-### RAG 问答
-- 多轮对话，自动指代消解（"它"、"这个" → 明确实体），严格保护专有名词不做翻译
-- 改写使用轻量模型（qwen-turbo），不占用主模型资源
-- 混合检索：dense（语义）+ BM25（关键词）+ RRF 融合
-- 向量化前自动剥离图片占位符（`<<IMAGE:xxx>>`），避免污染向量和 BM25 索引；检索后从 PG 回填含占位符的原始内容供 LLM 使用
-- 多文档分组搜索：每个文档取 top-N chunk，保证结果多样性
-- 关键词精确预过滤模式
-- 每个知识库独立检索参数（ranker / top_k / group_size / memory_turns 等）
-- 图文模式：LLM 输出的图片占位符经后处理校验，自动清除非法占位符
-
-### 对话记忆
-- 基于 LangGraph `AsyncPostgresSaver`，以 `session_id` 为键持久化 agent 状态
-- 重启后端历史不丢失
-- 无会话模式（`session_id="default"`）也有持久化记忆
-- 对话记忆轮数（`memory_turns`）可在知识库检索配置中设定，默认 2 轮
+</details>
 
 ---
 
-## 服务端口
+## 🔧 服务端口
 
 | 服务 | 端口 |
 |------|------|
@@ -142,49 +158,37 @@ npm run dev
 
 ---
 
-## 常见问题
+## ❓ 常见问题
+
+<details>
+<summary>展开查看</summary>
 
 **Milvus 启动慢？**
 首次启动需初始化 etcd 和 MinIO，等 `docker-compose ps` 显示 `healthy` 再启后端。
 
-**embedding 报 Model access denied？**
-检查 `DASHSCOPE_API_KEY` 是否开通了对应 embedding 模型的权限。
+**embedding 报 batch size 错误？**
+`text-embedding-v3` 单批上限 10 条，`.env` 中 `EMBEDDING_BATCH_SIZE` 请设为 10。
 
-**切分后 job 状态停在 `chunked`？**
-正常，切分和向量化已解耦。在文件列表页选中文件点"上传向量库"手动触发。
+**切分后 job 停在 `chunked`？**
+正常，切分与向量化解耦。在文件列表页点"上传向量库"手动触发。
+
+**向量化大文件部分失败？**
+系统分批（每批 100 条）独立重试，失败时 job 保持 `chunked`，重新点"上传向量库"可安全重试（upsert 幂等）。
+
+**Rerank 如何开启？**
+在知识库检索配置中将 `rerank_enabled` 设为开启，确认 DashScope 已开通 `qwen3-rerank` 权限。多模态知识库自动跳过 rerank。
 
 **上传同名文件报 409？**
-设计如此，防止静默覆盖。先在文件列表删除旧版本，再重新上传。
+设计如此，防止静默覆盖。先在文件列表删除旧版本再重新上传。
 
-**历史对话图片显示不出来？**
-OSS 预签名 URL 有效期 1 小时，刷新页面重新 resolve 即可。
+</details>
 
-更多问题参见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+---
 
-**图片占位符完整处理链路**
-切片阶段（doc_image_parser.py）
+## 📖 详细架构
 
-PDF/DOCX 解析时，文字和图片按页面位置排序交织处理。遇到图片时：
+完整的架构说明、数据库表结构、API 路由、RAG 流程细节见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
 
-上传图片到 OSS（路径 rag_image/{kb}/{file}/{chunk_id}/xxx.png）
-生成 <<IMAGE:xxxxxxxx>>（8位 hex）占位符，直接插入 buffer 文本流
-写 knowledge_chunk_image 表（chunk_id, placeholder, oss_key）
-最终 chunk 的 content 形如：
-
-这是一段说明文字<<IMAGE:9593bf16>>下面继续文字内容
-向量化阶段（milvus_service.upsert_chunks）
-
-content 字段（含占位符）直接送入 DashScope embedding，同时作为 BM25 的 content 字段写入 Milvus。占位符字符串 <<IMAGE:9593bf16>> 会被完整向量化和 BM25 索引。
-
-生成阶段（generate.py）
-
-检索到 chunk 后，批量查 knowledge_chunk_image 表，生成 image_map（placeholder → 预签名 URL）。LLM 的 system prompt 里包含含占位符的 context，LLM 被要求在回答中引用占位符。_sanitize_image_placeholders 过滤掉 LLM 捏造的非法占位符。
-
-前端渲染（SimpleChat.vue）
-
-实时回答：image_map 随 API 响应返回，前端把 <<IMAGE:xxx>> 替换成 ![image](presigned_url) 再用 markdown-it 渲染。
-
-历史消息：conversation_message.image_placeholders 存占位符列表，加载历史时批量调 POST /chunks/resolve-images 获取预签名 URL，再替换渲染。
 ---
 
 ## License
