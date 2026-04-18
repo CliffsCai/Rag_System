@@ -15,13 +15,31 @@
 
 ## 📸 界面预览
 
+**系统首页** — 知识库列表与管理入口，支持创建、配置、删除知识库。
+
 <p align="center">
   <img src="docs/首页.png" width="100%" alt="系统首页" />
 </p>
 
+**普通对话检索效果** — 基于混合检索（Dense + BM25 + RRF）的问答结果，命中精准，来源可溯。下图为在一本三国演义中问一个细节。共1000+切片。
+
 <p align="center">
-  <img src="docs/对话页面.png" width="49%" alt="知识库问答" />
-  <img src="docs/对话效果.png" width="49%" alt="对话效果" />
+  <img src="docs/普通对话检索效果.png" width="49%" alt="普通对话检索效果" />
+  <img src="docs/普通对话测试文件.png" width="49%" alt="普通对话测试文件" />
+</p>
+
+**知识库命中测试** — 展示检索召回的 chunk 内容及相关度评分，便于调试和验证检索质量。
+
+<p align="center">
+  <img src="docs/知识库命中测试.png" width="100%" alt="知识库命中测试" />
+</p>
+
+**图文并茂对话 & 多模态效果** — 自动提取 PDF/DOCX 中的图片，LLM 回答时同步展示关联图片，支持图文混合理解。
+
+<p align="center">
+  <img src="docs/图文并茂对话效果.png" width="32%" alt="图文并茂对话效果" />
+  <img src="docs/多模态对话效果1.png" width="32%" alt="多模态对话效果1" />
+  <img src="docs/多模态对话效果2.png" width="32%" alt="多模态对话效果2" />
 </p>
 
 ---
